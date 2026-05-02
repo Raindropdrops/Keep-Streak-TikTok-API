@@ -642,23 +642,29 @@ class TikTokStreakBot:
                 # Click on input field to focus
                 input_field.click()
                 time.sleep(0.5)
+                self.page.get_screenshot(path=os.path.join(LOGS_DIR, f"{username}_1_focus.jpg"))
                 
                 # Type the message
                 message_to_send = self.custom_message if self.custom_message else STREAK_MESSAGE
                 input_field.input(message_to_send)
-                time.sleep(0.5)
+                time.sleep(1)
+                self.page.get_screenshot(path=os.path.join(LOGS_DIR, f"{username}_2_typed.jpg"))
                 
                 # Find and click send button, or press Enter
-                send_button = self.page.ele('css:button[data-e2e="send-button"], button[class*="send"], button[class*="Send"]')
+                send_button = self.page.ele('css:[data-e2e="chat-send"], [data-e2e="send-button"], svg[class*="send"], svg[class*="Send"]')
                 
                 if send_button:
+                    logger.debug("Found send button, clicking it...")
                     send_button.click()
                 else:
+                    logger.debug("No send button found, pressing Enter...")
                     # Press Enter to send (use Keys.ENTER instead of literal \n)
                     from DrissionPage.common import Keys
                     input_field.input(Keys.ENTER)
                 
-                time.sleep(MESSAGE_SEND_DELAY)
+                time.sleep(2)
+                self.page.get_screenshot(path=os.path.join(LOGS_DIR, f"{username}_3_sent.jpg"))
+                time.sleep(MESSAGE_SEND_DELAY - 2)
                 
                 logger.info(f"✅ Message sent to: {username}")
                 return True
