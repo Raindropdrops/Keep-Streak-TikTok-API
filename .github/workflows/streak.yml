@@ -1,0 +1,76 @@
+name: TikTok Streak Bot
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC (07:00 Vietnam time)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub UI
+    inputs:
+      skip_cooldown:
+        description: 'Skip daily cooldown check'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  streak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup cookies from secret
+        run: echo "${{ secrets.TIKTOK_COOKIES }}" | base64 -d > cookies.json
+
+      - name: Setup contacts from secret
+        run: echo "${{ secrets.CONTACTS_JSON }}" | base64 -d > contacts.json
+
+      - name: Setup environment
+        run: |
+          cat <<EOF > .env
+          HEADLESS_MODE=true
+          TELEGRAM_ENABLED=true
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          STREAK_MESSAGE=${{ secrets.STREAK_MESSAGE || '🔥 Streak! 🔥' }}
+          DAILY_COOLDOWN=true
+          SKIP_UNREACHABLE=true
+          NETWORK_CHECK=true
+          MAX_RETRIES_PER_CONTACT=4
+          EOF
+
+      - name: Run streak bot
+        run: |
+          ARGS="--now"
+          if [ "${{ github.event.inputs.skip_cooldown }}" = "true" ]; then
+            ARGS="$ARGS --skip-cooldown"
+          fi
+          python streak_bot.py $ARGS
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: streak-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
+
+      - name: Upload run history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-history-${{ github.run_number }}
+          path: run_history.json
+          retention-days: 30
