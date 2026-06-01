@@ -71,9 +71,23 @@ def load_cookies(browser, filepath):
                         cookie['expiry'] = int(cookie['expirationDate'])
                     if 'expiry' in cookie:
                         cookie['expiry'] = int(cookie['expiry'])
+
+                    # Chuẩn hóa SameSite để tránh lỗi Assertion của Selenium
+                    if 'sameSite' in cookie:
+                        val = str(cookie['sameSite']).lower()
+                        if val == 'lax':
+                            cookie['sameSite'] = 'Lax'
+                        elif val == 'strict':
+                            cookie['sameSite'] = 'Strict'
+                        elif val in ('none', 'no_restriction'):
+                            cookie['sameSite'] = 'None'
+                        else:
+                            # Xoá sameSite nếu không hợp lệ để Selenium/Chrome tự quyết định
+                            del cookie['sameSite']
+                            
                     browser.add_cookie(cookie)
                 except Exception as e:
-                    pass
+                    print(f"[Cookies Warning] Lỗi khi thêm cookie {cookie.get('name')}: {e}")
             print(f"[Cookies] Đã nạp cookies thành công từ {filepath}")
             return True
     except Exception as e:
