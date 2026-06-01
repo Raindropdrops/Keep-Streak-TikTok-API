@@ -17,11 +17,24 @@ load_dotenv()
 
 
 def init_browser(headless=True):
+    from config import USER_AGENT
     chrome_options = Options()
     chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument(f"user-agent={USER_AGENT}")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
     if headless:
         chrome_options.add_argument("--headless=new")
     browser = webdriver.Chrome(options=chrome_options)
+    
+    # Xoá flag navigator.webdriver để tránh bị TikTok phát hiện bot
+    try:
+        browser.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
+    except:
+        pass
 
     wait = WebDriverWait(browser, 20)
 
@@ -45,6 +58,8 @@ def load_cookies(browser, filepath):
             for cookie in cookies:
                 try:
                     # Chuyển đổi hạn dùng nếu cần thiết
+                    if 'expirationDate' in cookie and 'expiry' not in cookie:
+                        cookie['expiry'] = int(cookie['expirationDate'])
                     if 'expiry' in cookie:
                         cookie['expiry'] = int(cookie['expiry'])
                     browser.add_cookie(cookie)
@@ -499,7 +514,11 @@ def load_contacts():
         try:
             req = urllib.request.Request(
                 url,
-                headers={"x-api-key": api_key, "Accept": "application/json"}
+                headers={
+                    "x-api-key": api_key,
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                }
             )
             with urllib.request.urlopen(req, timeout=15) as response:
                 data = json.loads(response.read().decode("utf-8"))
@@ -581,7 +600,8 @@ def save_contacts(contacts):
                 headers={
                     "x-api-key": api_key,
                     "Content-Type": "application/json",
-                    "Accept": "application/json"
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
                 },
                 method="POST"
             )

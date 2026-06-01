@@ -1,8 +1,14 @@
 import os
+import sys
 import json
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+
+# Cấu hình stdout sử dụng UTF-8 để tránh lỗi hiển thị tiếng Việt trên Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 
 def main():
     print("====================================================")

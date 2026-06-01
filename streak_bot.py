@@ -1,6 +1,12 @@
 import os
+import sys
 import argparse
 from dotenv import load_dotenv
+
+# Cấu hình stdout sử dụng UTF-8 để tránh lỗi hiển thị tiếng Việt trên Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 from utils import init_browser, login_tiktok, resolve_contacts_flow, load_contacts
 
 # Load environment variables
