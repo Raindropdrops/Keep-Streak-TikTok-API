@@ -617,24 +617,34 @@ function getHTMLPage() {
     }
 
     async function fetchContacts() {
-        const loadingEl = document.getElementById("loading-state");
-        const emptyEl = document.getElementById("empty-state");
-        const tableContainerEl = document.getElementById("table-container");
+        var loadingEl = document.getElementById("loading-state");
+        var emptyEl = document.getElementById("empty-state");
+        var tableContainerEl = document.getElementById("table-container");
         loadingEl.style.display = "flex"; emptyEl.style.display = "none"; tableContainerEl.style.display = "none";
 
         try {
-            const response = await fetch(API_URL + "?action=get_contacts", {
+            console.log('[Dashboard] Fetching contacts from:', API_URL + '?action=get_contacts');
+            var response = await fetch(API_URL + "?action=get_contacts", {
                 headers: { 'x-api-key': API_KEY }
             });
+            console.log('[Dashboard] Response status:', response.status);
             if (response.status === 401) {
-                showToast("Khóa API không chính xác.", "error");
+                loadingEl.style.display = "none";
+                showToast("Khoa API khong chinh xac. Vui long nhap lai.", "error");
                 openApiKeyModal();
                 return;
             }
-            const contacts = await response.json();
+            if (!response.ok) {
+                loadingEl.style.display = "none";
+                showToast("Loi server: HTTP " + response.status, "error");
+                return;
+            }
+            var contacts = await response.json();
+            console.log('[Dashboard] Got contacts:', contacts.length);
             renderDashboard(contacts);
         } catch (error) {
-            showToast("Lỗi: " + error.message, "error");
+            console.error('[Dashboard] Fetch error:', error);
+            showToast("Loi ket noi: " + error.message, "error");
         } finally {
             loadingEl.style.display = "none";
         }
@@ -677,26 +687,31 @@ function getHTMLPage() {
             const checkedAttr = c.enabled ? 'checked' : '';
 
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td data-label="Bạn bè">' +
+            var toggleFn = 'toggleContact(&quot;' + uHandle + '&quot;, this.checked)';
+            var editFn = 'openEditAliasesModal(&quot;' + uHandle + '&quot;, ' + aliasesJson.replace(/"/g, '&quot;') + ')';
+            var deleteFn = 'deleteContact(&quot;' + uHandle + '&quot;)';
+
+            var cellsHtml = '<td data-label="Ban be">' +
                 '<div class="user-info">' +
                 '<span class="user-name">' + uName + '</span>' +
                 '<a href="https://www.tiktok.com/@' + uHandle + '" target="_blank" class="user-handle">@' + uHandle + '</a>' +
                 '</div></td>' +
-                '<td data-label="Biệt hiệu phụ">' + aliasesHtml + '</td>' +
-                '<td data-label="Trạng thái">' +
+                '<td data-label="Biet hieu phu">' + aliasesHtml + '</td>' +
+                '<td data-label="Trang thai">' +
                 '<div>' + statusBadge + '</div>' +
-                '<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">Thành công: ' + c.success_count + ' | Thất bại: ' + c.failure_count + '</div>' +
+                '<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">Thanh cong: ' + c.success_count + ' | That bai: ' + c.failure_count + '</div>' +
                 '</td>' +
-                '<td data-label="Chạy bot" style="text-align:center;">' +
+                '<td data-label="Chay bot" style="text-align:center;">' +
                 '<label class="switch">' +
-                '<input type="checkbox" ' + checkedAttr + ' onchange="toggleContact(\'' + uHandle + '\', this.checked)">' +
+                '<input type="checkbox" ' + checkedAttr + ' onchange="' + toggleFn + '">' +
                 '<span class="slider"></span>' +
                 '</label></td>' +
-                '<td data-label="Hành động" style="text-align:center;">' +
+                '<td data-label="Hanh dong" style="text-align:center;">' +
                 '<div class="action-cell" style="justify-content:flex-end;">' +
-                '<button class="btn btn-secondary btn-icon" onclick="openEditAliasesModal(\'' + uHandle + '\', ' + aliasesJson + ')">Sửa</button>' +
-                '<button class="btn btn-danger btn-icon" onclick="deleteContact(\'' + uHandle + '\')">Xóa</button>' +
+                '<button class="btn btn-secondary btn-icon" onclick="' + editFn + '">Sua</button>' +
+                '<button class="btn btn-danger btn-icon" onclick="' + deleteFn + '">Xoa</button>' +
                 '</div></td>';
+            tr.innerHTML = cellsHtml;
             tbody.appendChild(tr);
         });
         updateStats(total, enabledCount, successSent);
@@ -769,7 +784,18 @@ function getHTMLPage() {
 
     function escapeHtml(text) {
         if (!text) return "";
-        return text.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        var s = text.toString();
+        var out = '';
+        for (var i = 0; i < s.length; i++) {
+            var ch = s.charAt(i);
+            if (ch === '&') out += '&amp;';
+            else if (ch === String.fromCharCode(60)) out += '&lt;';
+            else if (ch === String.fromCharCode(62)) out += '&gt;';
+            else if (ch === '"') out += '&quot;';
+            else if (ch === "'") out += '&#039;';
+            else out += ch;
+        }
+        return out;
     }
 </script>
 </body>
