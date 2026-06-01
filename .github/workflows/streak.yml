@@ -2,8 +2,8 @@ name: TikTok Streak Auto Send
 
 on:
   schedule:
-    # Chạy hàng ngày lúc 12:00 UTC (19:00 giờ Việt Nam)
-    - cron: '0 12 * * *'
+    # Chạy hàng ngày lúc 21:00 UTC (04:00 sáng giờ Việt Nam)
+    - cron: '0 21 * * *'
   workflow_dispatch:
     inputs:
       resolve_contacts:
