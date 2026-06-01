@@ -307,7 +307,11 @@ def click_chat_by_name(browser, name):
     for el in elements:
         try:
             if el.text.strip() == name:
-                el.click()
+                # Cuộn phần tử vào giữa màn hình để đảm bảo nó hiển thị
+                browser.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                time.sleep(0.5)
+                # Click bằng JS để tránh bị che chắn hoặc lỗi click của Selenium
+                browser.execute_script("arguments[0].click();", el)
                 return True
         except:
             continue
@@ -419,7 +423,10 @@ def send_messages_flow(browser, wait):
                     if not name_in_sidebar:
                         continue
                         
-                    sidebar_elements[idx].click()
+                    el = sidebar_elements[idx]
+                    browser.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                    time.sleep(0.5)
+                    browser.execute_script("arguments[0].click();", el)
                     clicked_indices.add(idx)
                     time.sleep(2)
                     
@@ -809,28 +816,67 @@ def scroll_chat_list(browser):
         return {"success": False}
 
 def extract_active_chat_profile(browser):
-    selectors = [
-        (By.CSS_SELECTOR, "a[class*='StyledLink'][href*='/@']"),
-        (By.CSS_SELECTOR, "div[class*='ChatHeader'] a[href*='/@']"),
-        (By.CSS_SELECTOR, "div[class*='Header'] a[href*='/@']"),
-        (By.CSS_SELECTOR, "a[href*='/@']"),
-        (By.CLASS_NAME, "css-1qxabns-StyledLink"),
-    ]
     my_username = os.getenv("TIKTOK_USERNAME")
-    for by, selector in selectors:
+    
+    # 1. Thử tìm trong các container tiêu đề chat trước (Ưu tiên cao nhất)
+    header_selectors = [
+        "div[class*='ChatHeader']",
+        "div[class*='Header']",
+        "[class*='ChatHeader']",
+        "[class*='Header']",
+    ]
+    for container_sel in header_selectors:
         try:
-            elements = browser.find_elements(by, selector)
-            for el in elements:
-                href = el.get_attribute("href")
-                if href and "/@" in href:
-                    username_match = re.search(r"/@([^/?#]+)", href)
-                    if username_match:
-                        username = username_match.group(1)
-                        if my_username and username.lower() == my_username.lower():
-                            continue
-                        return href, username
+            containers = browser.find_elements(By.CSS_SELECTOR, container_sel)
+            for container in containers:
+                links = container.find_elements(By.CSS_SELECTOR, "a[href*='/@']")
+                for link in links:
+                    href = link.get_attribute("href")
+                    if href and "/@" in href:
+                        username_match = re.search(r"/@([^/?#]+)", href)
+                        if username_match:
+                            username = username_match.group(1)
+                            if my_username and username.lower() == my_username.lower():
+                                continue
+                            return href, username
         except:
-            continue
+            pass
+
+    # 2. Fallback: Quét toàn bộ link profile trên trang nhưng loại trừ sidebar
+    try:
+        all_links = browser.find_elements(By.CSS_SELECTOR, "a[href*='/@']")
+        for link in all_links:
+            href = link.get_attribute("href")
+            if not href or "/@" not in href:
+                continue
+                
+            # Kiểm tra xem link này có nằm trong sidebar không
+            is_in_sidebar = False
+            try:
+                # Đi ngược lên 5 cấp cha để kiểm tra class/id
+                parent = link
+                for _ in range(5):
+                    parent = parent.find_element(By.XPATH, "..")
+                    p_class = parent.get_attribute("class") or ""
+                    p_id = parent.get_attribute("id") or ""
+                    if any(x in p_class.lower() or x in p_id.lower() for x in ("sidebar", "chatlist", "list", "contact")):
+                        is_in_sidebar = True
+                        break
+            except:
+                pass
+                
+            if is_in_sidebar:
+                continue
+                
+            username_match = re.search(r"/@([^/?#]+)", href)
+            if username_match:
+                username = username_match.group(1)
+                if my_username and username.lower() == my_username.lower():
+                    continue
+                return href, username
+    except:
+        pass
+        
     return None, None
 
 def extract_active_chat_display_name(browser, profile_element_text=None):
