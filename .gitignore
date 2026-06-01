@@ -1,37 +1,6 @@
-# Environment
+/node_modules
+/dist
 .env
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-.venv/
-
-# Logs
-logs/
-*.log
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Security - NEVER COMMIT THESE
-*.key
-*.pem
-cookies.json
+/__pycache__
 contacts.json
-run_history.json
-
-# Temporary
-*.tmp
-*.bak
+logs/

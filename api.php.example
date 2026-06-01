@@ -1,0 +1,299 @@
+<?php
+/**
+ * TikTok Streak Auto - Backend API Proxy
+ * 
+ * Hướng dẫn sử dụng:
+ * 1. Đổi tên file này thành `api.php`
+ * 2. Cấu hình thông tin kết nối Database và API Key ở phần Cấu hình bên dưới.
+ * 3. Upload file này lên Hosting cùng thư mục với `index.php`.
+ */
+
+// --- CẤU HÌNH HỆ THỐNG ---
+define('DB_HOST', 'localhost');       // Thường là localhost trên Hosting
+define('DB_NAME', 'YOUR_DATABASE_NAME'); // Tên Database bạn tạo trên phpMyAdmin
+define('DB_USER', 'YOUR_DATABASE_USER'); // Tên User Database
+define('DB_PASS', 'YOUR_DATABASE_PASSWORD'); // Mật khẩu User Database
+define('API_KEY', 'YOUR_SECRET_API_KEY'); // Đặt khóa bảo mật tự chọn của bạn
+
+// --- THIẾT LẬP LỚP BẢO MẬT & CORS ---
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Headers: Content-Type, x-api-key, Authorization");
+header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+header("Content-Type: application/json; charset=UTF-8");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    exit(0);
+}
+
+// Kiểm tra bảo mật API Key
+$headers = getallheaders();
+$received_key = '';
+
+if (isset($headers['x-api-key'])) {
+    $received_key = $headers['x-api-key'];
+} elseif (isset($headers['X-Api-Key'])) {
+    $received_key = $headers['X-Api-Key'];
+} elseif (isset($_REQUEST['api_key'])) {
+    $received_key = $_REQUEST['api_key'];
+}
+
+if (empty($received_key) || $received_key !== API_KEY) {
+    http_response_code(401);
+    echo json_encode([
+        "status" => "error",
+        "message" => "Truy cập bị từ chối. API Key không hợp lệ."
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// --- KẾT NỐI DATABASE ---
+try {
+    $pdo = new PDO(
+        "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4",
+        DB_USER,
+        DB_PASS,
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4"
+        ]
+    );
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode([
+        "status" => "error",
+        "message" => "Không thể kết nối đến cơ sở dữ liệu: " . $e->getMessage()
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// --- XỬ LÝ CÁC ACTION ---
+$action = isset($_GET['action']) ? $_GET['action'] : '';
+
+switch ($action) {
+    case 'get_contacts':
+        try {
+            $stmt = $pdo->query("SELECT * FROM `tiktok_contacts` ORDER BY `enabled` DESC, `username` ASC");
+            $contacts = $stmt->fetchAll();
+            
+            // Format trường aliases từ chuỗi JSON sang mảng JSON thực thụ
+            foreach ($contacts as &$contact) {
+                if (!empty($contact['aliases'])) {
+                    $decoded = json_decode($contact['aliases'], true);
+                    $contact['aliases'] = is_array($decoded) ? $decoded : [];
+                } else {
+                    $contact['aliases'] = [];
+                }
+                $contact['enabled'] = (int)$contact['enabled'] === 1;
+                $contact['success_count'] = (int)$contact['success_count'];
+                $contact['failure_count'] = (int)$contact['failure_count'];
+            }
+            
+            echo json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+        }
+        break;
+
+    case 'save_contacts':
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            http_response_code(405);
+            echo json_encode(["status" => "error", "message" => "Yêu cầu POST được chấp nhận."]);
+            break;
+        }
+
+        // Nhận payload JSON từ bot
+        $input = file_get_contents('php://input');
+        $contacts = json_decode($input, true);
+
+        if (!is_array($contacts)) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Dữ liệu JSON không hợp lệ."]);
+            break;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            $sql = "INSERT INTO `tiktok_contacts` (
+                `username`, `display_name`, `aliases`, `profile_url`, `user_id`, `sec_uid`, 
+                `conversation_id`, `last_resolved_at`, `resolve_confidence`, 
+                `last_sent`, `last_sent_at`, `success_count`, `failure_count`, `enabled`
+            ) VALUES (
+                :username, :display_name, :aliases, :profile_url, :user_id, :sec_uid, 
+                :conversation_id, :last_resolved_at, :resolve_confidence, 
+                :last_sent, :last_sent_at, :success_count, :failure_count, :enabled
+            ) ON DUPLICATE KEY UPDATE
+                `display_name` = VALUES(`display_name`),
+                `aliases` = VALUES(`aliases`),
+                `profile_url` = VALUES(`profile_url`),
+                `user_id` = VALUES(`user_id`),
+                `sec_uid` = VALUES(`sec_uid`),
+                `conversation_id` = VALUES(`conversation_id`),
+                `last_resolved_at` = VALUES(`last_resolved_at`),
+                `resolve_confidence` = VALUES(`resolve_confidence`),
+                `last_sent` = VALUES(`last_sent`),
+                `last_sent_at` = VALUES(`last_sent_at`),
+                `success_count` = VALUES(`success_count`),
+                `failure_count` = VALUES(`failure_count`),
+                `enabled` = VALUES(`enabled`)";
+
+            $stmt = $pdo->prepare($sql);
+
+            foreach ($contacts as $c) {
+                if (empty($c['username'])) continue;
+
+                $aliases_str = isset($c['aliases']) ? json_encode($c['aliases'], JSON_UNESCAPED_UNICODE) : '[]';
+                $enabled_val = isset($c['enabled']) ? ($c['enabled'] ? 1 : 0) : 1;
+
+                $stmt->execute([
+                    ':username' => $c['username'],
+                    ':display_name' => isset($c['display_name']) ? $c['display_name'] : $c['username'],
+                    ':aliases' => $aliases_str,
+                    ':profile_url' => isset($c['profile_url']) ? $c['profile_url'] : null,
+                    ':user_id' => isset($c['user_id']) ? $c['user_id'] : null,
+                    ':sec_uid' => isset($c['sec_uid']) ? $c['sec_uid'] : null,
+                    ':conversation_id' => isset($c['conversation_id']) ? $c['conversation_id'] : null,
+                    ':last_resolved_at' => isset($c['last_resolved_at']) ? $c['last_resolved_at'] : null,
+                    ':resolve_confidence' => isset($c['resolve_confidence']) ? $c['resolve_confidence'] : 'low',
+                    ':last_sent' => isset($c['last_sent']) ? $c['last_sent'] : null,
+                    ':last_sent_at' => isset($c['last_sent_at']) ? $c['last_sent_at'] : null,
+                    ':success_count' => isset($c['success_count']) ? (int)$c['success_count'] : 0,
+                    ':failure_count' => isset($c['failure_count']) ? (int)$c['failure_count'] : 0,
+                    ':enabled' => $enabled_val
+                ]);
+            }
+
+            $pdo->commit();
+            echo json_encode(["status" => "success", "message" => "Đồng bộ danh sách bạn bè thành công."]);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => "Lỗi đồng bộ: " . $e->getMessage()]);
+        }
+        break;
+
+    case 'toggle_contact':
+        $username = isset($_REQUEST['username']) ? trim($_REQUEST['username']) : '';
+        $enabled = isset($_REQUEST['enabled']) ? (int)$_REQUEST['enabled'] : 1;
+
+        if (empty($username)) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Thiếu username."]);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE `tiktok_contacts` SET `enabled` = :enabled WHERE `username` = :username");
+            $stmt->execute([':enabled' => $enabled, ':username' => $username]);
+            echo json_encode(["status" => "success", "message" => "Đã " . ($enabled ? "bật" : "tắt") . " liên hệ @" . $username]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+        }
+        break;
+
+    case 'add_contact':
+        $username = isset($_REQUEST['username']) ? trim($_REQUEST['username']) : '';
+        $display_name = isset($_REQUEST['display_name']) ? trim($_REQUEST['display_name']) : '';
+
+        // Xử lý loại bỏ ký tự @ ở đầu nếu người dùng vô tình nhập
+        if (strpos($username, '@') === 0) {
+            $username = substr($username, 1);
+        }
+
+        if (empty($username)) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Thiếu username."]);
+            break;
+        }
+
+        if (empty($display_name)) {
+            $display_name = $username;
+        }
+
+        try {
+            // Kiểm tra trùng lặp
+            $stmt = $pdo->prepare("SELECT id FROM `tiktok_contacts` WHERE `username` = :username");
+            $stmt->execute([':username' => $username]);
+            if ($stmt->fetch()) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Tài khoản @" . $username . " đã tồn tại."]);
+                break;
+            }
+
+            $profile_url = "https://www.tiktok.com/@" . $username;
+            $stmt = $pdo->prepare("INSERT INTO `tiktok_contacts` (`username`, `display_name`, `profile_url`, `aliases`, `enabled`) VALUES (:username, :display_name, :profile_url, '[]', 1)");
+            $stmt->execute([
+                ':username' => $username,
+                ':display_name' => $display_name,
+                ':profile_url' => $profile_url
+            ]);
+            echo json_encode(["status" => "success", "message" => "Đã thêm bạn bè thành công."]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+        }
+        break;
+
+    case 'delete_contact':
+        $username = isset($_REQUEST['username']) ? trim($_REQUEST['username']) : '';
+
+        if (empty($username)) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Thiếu username."]);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare("DELETE FROM `tiktok_contacts` WHERE `username` = :username");
+            $stmt->execute([':username' => $username]);
+            echo json_encode(["status" => "success", "message" => "Đã xoá liên hệ @" . $username]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+        }
+        break;
+
+    case 'update_aliases':
+        $username = isset($_REQUEST['username']) ? trim($_REQUEST['username']) : '';
+        $aliases = isset($_REQUEST['aliases']) ? $_REQUEST['aliases'] : '';
+
+        if (empty($username)) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Thiếu username."]);
+            break;
+        }
+
+        // Đảm bảo aliases được lưu dưới dạng chuỗi JSON
+        $aliases_json = '[]';
+        if (is_array($aliases)) {
+            $aliases_json = json_encode($aliases, JSON_UNESCAPED_UNICODE);
+        } elseif (is_string($aliases)) {
+            // Thử giải mã xem có phải JSON string không
+            $decoded = json_decode($aliases, true);
+            if (is_array($decoded)) {
+                $aliases_json = $aliases;
+            } else {
+                // Nếu là chuỗi phân tách bởi dấu phẩy
+                $parts = array_filter(array_map('trim', explode(',', $aliases)));
+                $aliases_json = json_encode(array_values($parts), JSON_UNESCAPED_UNICODE);
+            }
+        }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE `tiktok_contacts` SET `aliases` = :aliases WHERE `username` = :username");
+            $stmt->execute([':aliases' => $aliases_json, ':username' => $username]);
+            echo json_encode(["status" => "success", "message" => "Cập nhật biệt hiệu phụ thành công."]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+        }
+        break;
+
+    default:
+        http_response_code(400);
+        echo json_encode(["status" => "error", "message" => "Hành động không hợp lệ hoặc thiếu tham số action."]);
+        break;
+}

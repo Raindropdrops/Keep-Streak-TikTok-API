@@ -1,76 +1,112 @@
-name: TikTok Streak Bot
+name: TikTok Streak Auto Send
 
 on:
   schedule:
-    # Run daily at 00:00 UTC (07:00 Vietnam time)
-    - cron: '0 0 * * *'
+    # Chạy hàng ngày lúc 12:00 UTC (19:00 giờ Việt Nam)
+    - cron: '0 12 * * *'
   workflow_dispatch:
-    # Allow manual trigger from GitHub UI
     inputs:
-      skip_cooldown:
-        description: 'Skip daily cooldown check'
-        required: false
-        default: 'false'
+      resolve_contacts:
+        description: 'Chạy Resolver cập nhật danh bạ trước khi gửi?'
         type: boolean
+        required: false
+        default: false
+      debug_screenshots:
+        description: 'Bật chụp ảnh màn hình debug?'
+        type: boolean
+        required: false
+        default: false
+      debug_html:
+        description: 'Bật lưu mã HTML khi lỗi?'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
-  streak:
+  run-streak-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Setup cookies from secret
-        run: echo "${{ secrets.TIKTOK_COOKIES }}" | base64 -d > cookies.json
-
-      - name: Setup contacts from secret
-        run: echo "${{ secrets.CONTACTS_JSON }}" | base64 -d > contacts.json
-
-      - name: Setup environment
         run: |
-          cat <<EOF > .env
-          HEADLESS_MODE=true
-          TELEGRAM_ENABLED=true
-          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
-          STREAK_MESSAGE=${{ secrets.STREAK_MESSAGE || '🔥 Streak! 🔥' }}
-          DAILY_COOLDOWN=true
-          SKIP_UNREACHABLE=true
-          NETWORK_CHECK=true
-          MAX_RETRIES_PER_CONTACT=4
-          EOF
-
-      - name: Run streak bot
-        run: |
-          ARGS="--now"
-          if [ "${{ github.event.inputs.skip_cooldown }}" = "true" ]; then
-            ARGS="$ARGS --skip-cooldown"
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install selenium python-dotenv fastapi uvicorn pydantic
           fi
-          python streak_bot.py $ARGS
 
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Install Chrome and ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Restore contacts cache
+        id: cache-restore
+        uses: actions/cache/restore@v3
         with:
-          name: streak-logs-${{ github.run_number }}
+          path: contacts.json
+          key: tiktok-streak-contacts-v2-${{ github.run_id }}
+          restore-keys: |
+            tiktok-streak-contacts-v2-
+
+      - name: Run Streak Bot
+        env:
+          TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
+          TIKTOK_PASSWORD: ${{ secrets.TIKTOK_PASSWORD }}
+          CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
+          MESSAGE: ${{ secrets.MESSAGE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ARGS=""
+          
+          # Tự động chạy resolver vào Thứ Hai hàng tuần hoặc khi kích hoạt thủ công
+          RUN_RESOLVER="false"
+          if [ "${{ github.event.inputs.resolve_contacts }}" = "true" ]; then
+            RUN_RESOLVER="true"
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%u)" = "1" ]; then
+            RUN_RESOLVER="true"
+          fi
+          
+          # Setup debug flags
+          if [ "${{ github.event.inputs.debug_screenshots }}" = "true" ]; then
+            ARGS="$ARGS --debug-screenshots"
+          fi
+          if [ "${{ github.event.inputs.debug_html }}" = "true" ]; then
+            ARGS="$ARGS --debug-html"
+          fi
+          
+          # Chạy resolver nếu được yêu cầu
+          if [ "$RUN_RESOLVER" = "true" ]; then
+            echo "Kích hoạt Contact Resolver..."
+            python streak_bot.py --resolve-contacts $ARGS
+          fi
+          
+          # Luôn chạy gửi tin nhắn
+          echo "Bắt đầu gửi tin nhắn..."
+          python streak_bot.py --send $ARGS
+
+      - name: Save contacts cache
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          path: contacts.json
+          key: tiktok-streak-contacts-v2-${{ github.run_id }}-${{ github.run_number }}
+
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: error-logs
           path: logs/
-          retention-days: 7
-
-      - name: Upload run history
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-history-${{ github.run_number }}
-          path: run_history.json
-          retention-days: 30
+          if-no-files-found: ignore

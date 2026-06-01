@@ -1,407 +1,80 @@
-"""
-TikTok Streak API v2.0
-=======================
-REST API for controlling the TikTok Streak Bot.
-
-Created by: Duc Anh
-
-Endpoints:
-    GET  /              - Welcome message
-    GET  /health        - Health check
-    GET  /status        - Detailed status
-    POST /v1/streak     - Run streak bot
-    GET  /v1/contacts   - List all contacts
-    POST /v1/contacts   - Add a contact
-    DELETE /v1/contacts/{nickname} - Remove a contact
-
-Usage:
-    uvicorn api:app --host 0.0.0.0 --port 8000
-    
-Docs:
-    http://localhost:8000/docs
-"""
-
-import os
-import sys
-import json
-from datetime import datetime
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
-import subprocess
+from typing import List, Optional
+import os
+from utils import load_contacts, save_contacts
 
-from config import (
-    APP_NAME,
-    APP_VERSION,
-    APP_ENV,
-    API_KEY,
-    CONTACTS_FILE,
-    RUN_HISTORY_FILE,
-    SCHEDULE_TIME,
-    SCHEDULE_INTERVAL_MINUTES,
-    STREAK_MESSAGE,
-    HEADLESS_MODE,
-    HOST,
-    PORT,
-)
+app = FastAPI(title="TikTok Streak Auto API", version="2.0.0")
 
-# =============================================================================
-# ASCII Art Banner
-# =============================================================================
-BANNER = r"""
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║   ████████╗██╗██╗  ██╗████████╗ ██████╗ ██╗  ██╗             ║
-║   ╚══██╔══╝██║██║ ██╔╝╚══██╔══╝██╔═══██╗██║ ██╔╝             ║
-║      ██║   ██║█████╔╝    ██║   ██║   ██║█████╔╝              ║
-║      ██║   ██║██╔═██╗    ██║   ██║   ██║██╔═██╗              ║
-║      ██║   ██║██║  ██╗   ██║   ╚██████╔╝██║  ██╗             ║
-║      ╚═╝   ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝             ║
-║                                                              ║
-║   ███████╗████████╗██████╗ ███████╗ █████╗ ██╗  ██╗          ║
-║   ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗██║ ██╔╝          ║
-║   ███████╗   ██║   ██████╔╝█████╗  ███████║█████╔╝           ║
-║   ╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██╔═██╗           ║
-║   ███████║   ██║   ██║  ██║███████╗██║  ██║██║  ██╗          ║
-║   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝          ║
-║                                                              ║
-║              █████╗ ██████╗ ██╗                              ║
-║             ██╔══██╗██╔══██╗██║                              ║
-║             ███████║██████╔╝██║                              ║
-║             ██╔══██║██╔═══╝ ██║                              ║
-║             ██║  ██║██║     ██║                              ║
-║             ╚═╝  ╚═╝╚═╝     ╚═╝                              ║
-║                                                              ║
-║                  Created by: Dức Anh                        ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
-"""
+class ContactUpdateSchema(BaseModel):
+    aliases: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+    user_id: Optional[str] = None
+    sec_uid: Optional[str] = None
+    conversation_id: Optional[str] = None
+    profile_url: Optional[str] = None
+    display_name: Optional[str] = None
 
-print(BANNER)
-
-# =============================================================================
-# FastAPI App
-# =============================================================================
-
-app = FastAPI(
-    title=APP_NAME,
-    description="REST API for TikTok Streak Bot v2.0. Created by Duc Anh.",
-    version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-# CORS Configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:*", "http://127.0.0.1:*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# =============================================================================
-# Models
-# =============================================================================
-
-class ContactRequest(BaseModel):
-    nickname: str
-
-
-class RunRequest(BaseModel):
-    message: Optional[str] = None
-
-
-class ApiResponse(BaseModel):
-    success: bool
-    message: str
-    data: Optional[dict] = None
-
-
-# =============================================================================
-# Authentication
-# =============================================================================
-
-async def verify_api_key(x_api_key: str = Header(None)):
-    """Verify API key from X-API-Key header."""
-    if not API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="API key not configured. Set API_KEY in .env file."
-        )
-    if not x_api_key or x_api_key != API_KEY:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key"
-        )
-    return x_api_key
-
-
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-def load_contacts():
-    """Load contacts from JSON file."""
-    if not os.path.exists(CONTACTS_FILE):
-        return []
-    
+def bg_resolve_contacts():
+    from utils import init_browser, login_tiktok, resolve_contacts_flow
+    browser = None
     try:
-        with open(CONTACTS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data.get('contacts', [])
-    except Exception:
-        return []
-
-
-def save_contacts(contacts):
-    """Save contacts to JSON file."""
-    try:
-        with open(CONTACTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({"contacts": contacts}, f, indent=4, ensure_ascii=False)
-        return True
-    except Exception:
-        return False
-
-
-def run_streak_bot(custom_message: str = None):
-    """Run the streak bot in background."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    bot_script = os.path.join(script_dir, 'streak_bot.py')
-    
-    cmd = [sys.executable, bot_script, '--now']
-    if custom_message:
-        cmd.extend(['--message', custom_message])
-    
-    try:
-        subprocess.Popen(
-            cmd,
-            cwd=script_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        return True
+        print("[API Background Task] Starting contact resolution...")
+        browser, wait = init_browser()
+        login_tiktok(browser, wait, os.getenv("TIKTOK_USERNAME"), os.getenv("TIKTOK_PASSWORD"))
+        resolve_contacts_flow(browser, wait)
+        print("[API Background Task] Contact resolution completed successfully.")
     except Exception as e:
-        print(f"Error running bot: {e}")
-        return False
+        print(f"[API Background Task] Error during contact resolution: {e}")
+    finally:
+        if browser:
+            try:
+                browser.quit()
+            except:
+                pass
 
-
-# =============================================================================
-# API Endpoints - General
-# =============================================================================
-
-@app.get("/", tags=["General"])
-async def root():
-    """API root - welcome message."""
-    return {
-        "name": APP_NAME,
-        "version": APP_VERSION,
-        "environment": APP_ENV,
-        "creator": "Duc Anh",
-        "docs": "/docs",
-        "endpoints": {
-            "health": "GET /health",
-            "status": "GET /status",
-            "run_streak": "POST /v1/streak",
-            "list_contacts": "GET /v1/contacts",
-            "add_contact": "POST /v1/contacts",
-            "remove_contact": "DELETE /v1/contacts/{nickname}"
-        }
-    }
-
-
-@app.get("/health", tags=["General"])
-async def health_check():
-    """Health check for monitoring tools."""
-    return {"status": "healthy"}
-
-
-@app.get("/status", tags=["General"])
-async def get_status():
-    """Get detailed server status."""
+@app.get("/v1/contacts")
+def get_contacts():
     contacts = load_contacts()
-    
-    return {
-        "app_name": APP_NAME,
-        "version": APP_VERSION,
-        "environment": APP_ENV,
-        "python_version": sys.version,
-        "schedule_time": SCHEDULE_TIME,
-        "schedule_interval_minutes": SCHEDULE_INTERVAL_MINUTES,
-        "headless_mode": HEADLESS_MODE,
-        "contacts_count": len(contacts),
-        "server_time": datetime.now().isoformat(),
-        "creator": "Duc Anh"
-    }
-
-
-# =============================================================================
-# API Endpoints - V1
-# =============================================================================
-
-@app.post("/v1/streak", tags=["Bot"], response_model=ApiResponse)
-async def run_streak(
-    background_tasks: BackgroundTasks,
-    request: RunRequest = None,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Run the streak bot.
-    
-    The bot runs in the background, so this endpoint returns immediately.
-    Check Telegram notifications for results.
-    
-    **Requires X-API-Key header.**
-    """
-    custom_message = request.message if request else None
-    
-    # Run bot in background
-    background_tasks.add_task(run_streak_bot, custom_message)
-    
-    return ApiResponse(
-        success=True,
-        message="Streak bot started in background",
-        data={
-            "custom_message": custom_message or STREAK_MESSAGE,
-            "started_at": datetime.now().isoformat()
+    enhanced_contacts = []
+    for c in contacts:
+        resolved = bool(c.get("last_resolved_at"))
+        enhanced = {
+            **c,
+            "resolved": resolved,
+            "resolve_status": "resolved" if resolved else "unresolved"
         }
-    )
+        enhanced_contacts.append(enhanced)
+    return enhanced_contacts
 
+@app.post("/v1/contacts/resolve", status_code=status.HTTP_202_ACCEPTED)
+def trigger_resolve(background_tasks: BackgroundTasks):
+    background_tasks.add_task(bg_resolve_contacts)
+    return {"message": "Contact resolution started in the background"}
 
-@app.get("/v1/contacts", tags=["Contacts"], response_model=ApiResponse)
-async def list_contacts(api_key: str = Depends(verify_api_key)):
-    """
-    Get all contacts.
-    
-    **Requires X-API-Key header.**
-    """
+@app.patch("/v1/contacts/{identifier}")
+def update_contact(identifier: str, payload: ContactUpdateSchema):
     contacts = load_contacts()
+    matched_contact = None
     
-    return ApiResponse(
-        success=True,
-        message=f"Found {len(contacts)} contacts",
-        data={
-            "contacts": contacts,
-            "count": len(contacts)
-        }
-    )
-
-
-@app.post("/v1/contacts", tags=["Contacts"], response_model=ApiResponse)
-async def add_contact(request: ContactRequest, api_key: str = Depends(verify_api_key)):
-    """
-    Add a new contact.
-    
-    **Requires X-API-Key header.**
-    """
-    nickname = request.nickname.strip()
-    
-    if not nickname:
-        raise HTTPException(status_code=400, detail="Nickname cannot be empty")
-    
-    contacts = load_contacts()
-    
-    # Check if already exists (case-insensitive)
-    if nickname.lower() in [c.lower() for c in contacts]:
-        raise HTTPException(status_code=409, detail=f"Contact '{nickname}' already exists")
-    
-    contacts.append(nickname)
-    
-    if save_contacts(contacts):
-        return ApiResponse(
-            success=True,
-            message=f"Contact '{nickname}' added successfully",
-            data={
-                "nickname": nickname,
-                "total_contacts": len(contacts)
-            }
+    # Search by username, user_id, or conversation_id
+    for c in contacts:
+        if c.get("username") == identifier or \
+           c.get("user_id") == identifier or \
+           c.get("conversation_id") == identifier:
+            matched_contact = c
+            break
+            
+    if not matched_contact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Contact with identifier '{identifier}' not found"
         )
-    else:
-        raise HTTPException(status_code=500, detail="Failed to save contact")
-
-
-@app.delete("/v1/contacts/{nickname}", tags=["Contacts"], response_model=ApiResponse)
-async def remove_contact(nickname: str, api_key: str = Depends(verify_api_key)):
-    """
-    Remove a contact by nickname.
-    
-    **Requires X-API-Key header.**
-    """
-    contacts = load_contacts()
-    original_count = len(contacts)
-    
-    # Remove case-insensitive
-    contacts = [c for c in contacts if c.lower() != nickname.lower()]
-    
-    if len(contacts) == original_count:
-        raise HTTPException(status_code=404, detail=f"Contact '{nickname}' not found")
-    
-    if save_contacts(contacts):
-        return ApiResponse(
-            success=True,
-            message=f"Contact '{nickname}' removed successfully",
-            data={
-                "nickname": nickname,
-                "remaining_contacts": len(contacts)
-            }
-        )
-    else:
-        raise HTTPException(status_code=500, detail="Failed to save changes")
-
-
-# =============================================================================
-# Error Handlers
-# =============================================================================
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Handle all unhandled exceptions."""
-    return JSONResponse(
-        status_code=500,
-        content={
-            "success": False,
-            "message": str(exc),
-            "data": None
-        }
-    )
-
-
-# =============================================================================
-# API Endpoints - Run History (v2.0)
-# =============================================================================
-
-@app.get("/v1/history", tags=["Bot"], response_model=ApiResponse)
-async def get_run_history(api_key: str = Depends(verify_api_key)):
-    """
-    Get bot run history (last 50 runs).
-
-    **Requires X-API-Key header.**
-    """
-    history = []
-    if os.path.exists(RUN_HISTORY_FILE):
-        try:
-            with open(RUN_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        except Exception:
-            pass
-
-    return ApiResponse(
-        success=True,
-        message=f"{len(history)} runs in history",
-        data={"history": history, "count": len(history)}
-    )
-
-
-# =============================================================================
-# Main
-# =============================================================================
-
-if __name__ == "__main__":
-    import uvicorn
-    print(f"\n🚀 Starting {APP_NAME} on http://{HOST}:{PORT}")
-    print(f"📚 Swagger docs: http://{HOST}:{PORT}/docs")
-    print(f"📖 ReDoc: http://{HOST}:{PORT}/redoc\n")
-    uvicorn.run("api:app", host=HOST, port=PORT, reload=(APP_ENV == "development"))
+        
+    # Apply updates
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        matched_contact[key] = value
+        
+    save_contacts(contacts)
+    return matched_contact
