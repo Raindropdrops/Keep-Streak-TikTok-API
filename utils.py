@@ -79,6 +79,10 @@ def login_tiktok(browser, wait, username, password):
         print("[Login] Tìm thấy cookies.json, tiến hành nạp phiên đăng nhập cũ...")
         browser.get('https://www.tiktok.com')
         time.sleep(3)
+        try:
+            browser.delete_all_cookies()  # Xoá cookies mặc định tránh xung đột
+        except:
+            pass
         if load_cookies(browser, COOKIES_FILE):
             browser.get('https://www.tiktok.com/messages?lang=vi')
             time.sleep(5)
@@ -87,6 +91,10 @@ def login_tiktok(browser, wait, username, password):
                 return
             else:
                 print("[Login] Cookies hết hạn hoặc không hợp lệ. Đang chuyển sang đăng nhập bằng mật khẩu...")
+                try:
+                    save_debug_info(browser, "cookie_login_failed", save_html=True)
+                except:
+                    pass
 
     # 2. Đăng nhập bằng form nếu không có cookies/cookies hết hạn
     print("[Login] Bắt đầu điều hướng tới trang đăng nhập TikTok...")
