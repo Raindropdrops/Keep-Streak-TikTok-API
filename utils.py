@@ -28,7 +28,53 @@ def init_browser(headless=True):
     return browser, wait
 
 
+def save_cookies(browser, filepath):
+    try:
+        cookies = browser.get_cookies()
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(cookies, f, indent=4)
+        print(f"[Cookies] Đã lưu cookies đăng nhập vào {filepath}")
+    except Exception as e:
+        print(f"[Cookies] Lỗi khi lưu cookies: {e}")
+
+def load_cookies(browser, filepath):
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                cookies = json.load(f)
+            for cookie in cookies:
+                try:
+                    # Chuyển đổi hạn dùng nếu cần thiết
+                    if 'expiry' in cookie:
+                        cookie['expiry'] = int(cookie['expiry'])
+                    browser.add_cookie(cookie)
+                except Exception as e:
+                    pass
+            print(f"[Cookies] Đã nạp cookies thành công từ {filepath}")
+            return True
+    except Exception as e:
+        print(f"[Cookies] Lỗi khi nạp cookies: {e}")
+    return False
+
 def login_tiktok(browser, wait, username, password):
+    from config import COOKIES_FILE
+    
+    # 1. Thử đăng nhập bằng cookies trước để tránh Captcha
+    if os.path.exists(COOKIES_FILE):
+        print("[Login] Tìm thấy cookies.json, tiến hành nạp phiên đăng nhập cũ...")
+        browser.get('https://www.tiktok.com')
+        time.sleep(3)
+        if load_cookies(browser, COOKIES_FILE):
+            browser.get('https://www.tiktok.com/messages?lang=vi')
+            time.sleep(5)
+            if is_logged_in(browser):
+                print("[Login] Đăng nhập bằng COOKIES THÀNH CÔNG!")
+                return
+            else:
+                print("[Login] Cookies hết hạn hoặc không hợp lệ. Đang chuyển sang đăng nhập bằng mật khẩu...")
+
+    # 2. Đăng nhập bằng form nếu không có cookies/cookies hết hạn
+    print("[Login] Bắt đầu điều hướng tới trang đăng nhập TikTok...")
     browser.get('https://www.tiktok.com/login/phone-or-email/email')
     
     actions = ActionChains(browser, duration=550)
@@ -38,17 +84,29 @@ def login_tiktok(browser, wait, username, password):
         password_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[autocomplete="new-password"]')))
         password_field.send_keys(password)
         wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "tiktok-11sviba-Button-StyledButton"))).click()
-        time.sleep(3)
+        time.sleep(5)
+        
         user_api_key = os.getenv('CAPTCHA_API_KEY')
-        print(user_api_key)
         number_captcha_attempts = 10
         action_type = 'tiktokcircle'
-        if oca_solve_captcha:
+        if oca_solve_captcha and user_api_key:
+            print(f"[Captcha] Đang giải captcha tự động với khóa: {user_api_key[:5]}...")
             oca_solve_captcha(browser, actions, user_api_key, action_type, number_captcha_attempts)
         else:
-            print("[Warning] Thư viện ocacaptcha chưa được cài đặt. Bỏ qua giải Captcha tự động.")
-    except:
-        print("You have logged in")
+            print("[Warning] Bỏ qua giải Captcha tự động (chưa cài thư viện hoặc thiếu CAPTCHA_API_KEY).")
+            print("👉 Vui lòng đăng nhập thủ công trên trình duyệt local để sinh file cookies.json.")
+            
+        time.sleep(5)
+    except Exception as e:
+        print(f"[Login] Lỗi khi điền form đăng nhập: {e}")
+
+    # Kiểm tra xem đã đăng nhập thành công chưa để lưu lại cookies
+    if is_logged_in(browser):
+        print("[Login] Đăng nhập bằng form THÀNH CÔNG! Đang lưu cookies mới...")
+        save_cookies(browser, COOKIES_FILE)
+    else:
+        print("[Login] Chưa đăng nhập được tài khoản.")
+
 
 
 def get_all_friends(browser, wait):
