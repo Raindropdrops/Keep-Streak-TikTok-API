@@ -1,21 +1,22 @@
--- SQL DDL to create the contacts table in phpMyAdmin
--- Upload or copy-paste this into the SQL tab of your phpMyAdmin on Tenten hosting.
+-- SQL DDL to create the contacts table in Cloudflare D1 (SQLite)
+-- Run this in Cloudflare Dashboard > D1 > Console, or via Wrangler CLI:
+--   wrangler d1 execute <DB_NAME> --file=schema.sql
 
-CREATE TABLE IF NOT EXISTS `tiktok_contacts` (
-  `id` INT AUTO_INCREMENT PRIMARY KEY,
-  `username` VARCHAR(100) NOT NULL UNIQUE,
-  `display_name` VARCHAR(150),
-  `aliases` TEXT, -- Stores JSON array of alias strings (e.g. '["Alias 1", "Alias 2"]')
-  `profile_url` VARCHAR(255),
-  `user_id` VARCHAR(100),
-  `sec_uid` VARCHAR(255),
-  `conversation_id` VARCHAR(100),
-  `last_resolved_at` DATETIME,
-  `resolve_confidence` VARCHAR(20) DEFAULT 'low',
-  `last_sent` VARCHAR(20),
-  `last_sent_at` DATETIME,
-  `success_count` INT DEFAULT 0,
-  `failure_count` INT DEFAULT 0,
-  `enabled` TINYINT(1) DEFAULT 1,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS tiktok_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  aliases TEXT DEFAULT '[]',  -- Stores JSON array of alias strings
+  profile_url TEXT,
+  user_id TEXT,
+  sec_uid TEXT,
+  conversation_id TEXT,
+  last_resolved_at TEXT,
+  resolve_confidence TEXT DEFAULT 'low',
+  last_sent TEXT,
+  last_sent_at TEXT,
+  success_count INTEGER DEFAULT 0,
+  failure_count INTEGER DEFAULT 0,
+  enabled INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
