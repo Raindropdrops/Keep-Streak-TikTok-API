@@ -16,7 +16,7 @@ if %ERRORLEVEL% NEQ 0 (
 :: Run bot immediately
 echo Running streak bot...
 echo.
-python streak_bot.py --now
+python streak_bot.py --send
 
 echo.
 echo ============================================================

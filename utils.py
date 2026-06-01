@@ -54,7 +54,16 @@ def load_cookies(browser, filepath):
     try:
         if os.path.exists(filepath):
             with open(filepath, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
+                cookies_data = json.load(f)
+            
+            if isinstance(cookies_data, dict) and "cookies" in cookies_data:
+                cookies = cookies_data["cookies"]
+            elif isinstance(cookies_data, list):
+                cookies = cookies_data
+            else:
+                print(f"[Cookies] Định dạng file cookies không hợp lệ: {filepath}")
+                return False
+                
             for cookie in cookies:
                 try:
                     # Chuyển đổi hạn dùng nếu cần thiết
