@@ -5,7 +5,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
-import time, re, csv, os, json
+import time, re, csv, os, json, random
 from datetime import datetime
 from dotenv import load_dotenv
 try:
@@ -129,7 +129,27 @@ def login_tiktok(browser, wait, username, password):
         wait.until(EC.presence_of_element_located((By.NAME, "username"))).send_keys(username)
         password_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[autocomplete="new-password"]')))
         password_field.send_keys(password)
-        wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "tiktok-11sviba-Button-StyledButton"))).click()
+        
+        # Danh sách selector dự phòng cho nút đăng nhập (class TikTok hay thay đổi)
+        login_button_selectors = [
+            (By.CLASS_NAME, "tiktok-11sviba-Button-StyledButton"),
+            (By.CSS_SELECTOR, "button[data-e2e='login-button']"),
+            (By.CSS_SELECTOR, "button[type='submit']"),
+            (By.XPATH, "//button[contains(@class,'Button') and not(@disabled)]"),
+            (By.XPATH, "//form//button[last()]"),
+        ]
+        login_clicked = False
+        for by, sel in login_button_selectors:
+            try:
+                btn = wait.until(EC.element_to_be_clickable((by, sel)))
+                btn.click()
+                login_clicked = True
+                print(f"[Login] Nút đăng nhập đã được click (selector: {sel})")
+                break
+            except:
+                continue
+        if not login_clicked:
+            print("[Login] Warning: Không tìm thấy nút đăng nhập bằng bất kỳ selector nào!")
         time.sleep(5)
         
         user_api_key = os.getenv('CAPTCHA_API_KEY')
@@ -237,6 +257,98 @@ def send_telegram_summary(stats, total_enabled):
     
     send_telegram_message(token, chat_id, message)
 
+
+# === HỆ THỐNG TIN NHẮN THÔNG MINH KHÔNG LẶP ===
+MESSAGE_HISTORY_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "message_history.json"
+)
+
+def _load_message_history():
+    """Đọc lịch sử tin nhắn đã gửi."""
+    if os.path.exists(MESSAGE_HISTORY_FILE):
+        try:
+            with open(MESSAGE_HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception as e:
+            print(f"[Message History] Lỗi đọc lịch sử: {e}")
+    return []
+
+def _save_message_history(history):
+    """Ghi lịch sử, chỉ giữ 90 ngày gần nhất."""
+    try:
+        history_sorted = sorted(history, key=lambda x: x["date"], reverse=True)
+        history_trimmed = history_sorted[:90]
+        with open(MESSAGE_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history_trimmed, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Message History] Lỗi ghi lịch sử: {e}")
+
+def _get_message_pool():
+    """Lấy toàn bộ pool câu từ biến môi trường MESSAGES."""
+    pool_val = os.getenv("MESSAGES", "").strip()
+    if pool_val:
+        pool = [m.strip() for m in pool_val.split("|") if m.strip()]
+        if pool:
+            return pool
+    legacy = os.getenv("MESSAGE", "").strip()
+    if legacy:
+        return [legacy]
+    return ["streak"]
+
+def get_message_for_today():
+    """
+    Chọn 1 tin nhắn mỗi ngày với cơ chế KHÔNG LẶP THÔNG MINH.
+
+    Thuật toán:
+      1. Nếu hôm nay đã có bản ghi → trả về câu đó (idempotent khi re-run).
+      2. Tính cửa sổ tránh lặp = min(7, pool_size - 1).
+         VD: 14 câu → không lặp trong 7 ngày; 4 câu → không lặp trong 3 ngày.
+      3. Lọc bỏ các câu đã dùng trong cửa sổ đó.
+      4. Random chọn 1 câu từ tập còn lại.
+      5. Lưu lịch sử.
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    history = _load_message_history()
+
+    # Bước 1: Idempotent — cùng ngày luôn trả về cùng câu
+    for entry in history:
+        if entry.get("date") == today_str:
+            msg = entry.get("message", "streak")
+            print(f"[Message] Hôm nay ({today_str}) đã chọn: '{msg}'")
+            return msg
+
+    # Bước 2: Lấy pool và tính cửa sổ tránh lặp
+    pool = _get_message_pool()
+    no_repeat_window = max(1, min(7, len(pool) - 1)) if len(pool) > 1 else 0
+    print(f"[Message] Pool: {len(pool)} câu | Cửa sổ tránh lặp: {no_repeat_window} ngày")
+
+    # Bước 3: Lọc các câu đã dùng gần đây
+    recent_messages = set()
+    if no_repeat_window > 0:
+        recent_entries = sorted(history, key=lambda x: x["date"], reverse=True)
+        for entry in recent_entries[:no_repeat_window]:
+            recent_messages.add(entry.get("message", ""))
+
+    available = [m for m in pool if m not in recent_messages]
+
+    # Nếu không còn câu nào (pool quá nhỏ) → dùng lại toàn bộ
+    if not available:
+        available = pool
+        print("[Message] Đã dùng hết pool, reset và chọn lại từ đầu.")
+
+    # Bước 4: Random chọn
+    chosen = random.choice(available)
+    print(f"[Message] Chọn: '{chosen}' ({len(available)}/{len(pool)} câu còn khả dụng)")
+
+    # Bước 5: Lưu lịch sử
+    history.append({"date": today_str, "message": chosen})
+    _save_message_history(history)
+
+    return chosen
+
+
 def send_and_verify_message(browser, wait, message, contact_username):
     input_selectors = [
         (By.CSS_SELECTOR, "div[contenteditable='true'][class*='public-DraftStyleDefault-block']"),
@@ -302,18 +414,34 @@ def send_and_verify_message(browser, wait, message, contact_username):
         print(f"[Send Error] Exception sending to @{contact_username}: {e}")
         return False, "send_button_missing"
 
+def normalize_name(text):
+    """Loại bỏ ký tự Unicode ẩn (zero-width, variation selectors) để so sánh chuỗi tên chính xác hơn."""
+    # Loại bỏ các ký tự variation selector (U+FE00–U+FE0F) và zero-width
+    invisible = [
+        '\u200b', '\u200c', '\u200d', '\u200e', '\u200f',  # zero-width chars
+        '\ufeff',                                             # BOM
+        '\ufe0f', '\ufe0e',                                  # variation selectors
+    ]
+    result = text
+    for ch in invisible:
+        result = result.replace(ch, '')
+    return result.strip()
+
 def click_chat_by_name(browser, name):
+    normalized_name = normalize_name(name)
     elements = find_chat_nickname_elements(browser)
     for el in elements:
         try:
-            if el.text.strip() == name:
+            el_text = normalize_name(el.text)
+            if el_text == normalized_name:
                 # Cuộn phần tử vào giữa màn hình để đảm bảo nó hiển thị
                 browser.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
                 time.sleep(0.5)
                 # Click bằng JS để tránh bị che chắn hoặc lỗi click của Selenium
                 browser.execute_script("arguments[0].click();", el)
                 return True
-        except:
+        except Exception:
+            # Stale element hoặc lỗi khác → thử phần tử tiếp
             continue
     return False
 
@@ -338,7 +466,7 @@ def send_messages_flow(browser, wait):
         print("[Send Flow] No enabled contacts found. Skipping.")
         return {"status": "success", "sent_count": 0}
         
-    message_text = os.getenv("MESSAGE", "streak")
+    message_text = get_message_for_today()
     stats = []
     sent_usernames = set()
     
@@ -347,57 +475,67 @@ def send_messages_flow(browser, wait):
         scroll_chat_list(browser)
         time.sleep(1)
         
-    for pass_num in range(2):
-        sidebar_elements = find_chat_nickname_elements(browser)
-        sidebar_names = [el.text.strip() for el in sidebar_elements if el.text.strip()]
-        
-        for name in sidebar_names:
-            matched_contact = None
-            for c in enabled_contacts:
-                if c["username"] in sent_usernames:
-                    continue
-                if c["display_name"] == name or name in c.get("aliases", []) or c["username"] == name:
-                    matched_contact = c
-                    break
-                    
-            if matched_contact:
-                username = matched_contact["username"]
-                print(f"[Send Flow] Fast-match found chat for @{username} (Display name: '{name}')")
+    sidebar_elements = find_chat_nickname_elements(browser)
+    sidebar_names = [el.text.strip() for el in sidebar_elements if el.text.strip()]
+    
+    for name in sidebar_names:
+        matched_contact = None
+        for c in enabled_contacts:
+            if c["username"] in sent_usernames:
+                continue
+            if c["display_name"] == name or name in c.get("aliases", []) or c["username"] == name:
+                matched_contact = c
+                break
                 
-                if click_chat_by_name(browser, name):
+        if matched_contact:
+            username = matched_contact["username"]
+            print(f"[Send Flow] Fast-match found chat for @{username} (Display name: '{name}')")
+            
+            if click_chat_by_name(browser, name):
+                # Chờ thêm để TikTok load xong profile header
+                time.sleep(3)
+                active_href, active_username = extract_active_chat_profile(browser)
+                
+                # Nếu lần đầu chưa lấy được username, thử lại sau 2 giây
+                if not active_username:
                     time.sleep(2)
                     active_href, active_username = extract_active_chat_profile(browser)
-                    active_conv_id = extract_conversation_id(browser)
+                
+                active_conv_id = extract_conversation_id(browser)
+                
+                verified = False
+                if active_username and active_username.lower() == username.lower():
+                    verified = True
+                    print(f"[Send Flow] ✅ Verified by username: @{active_username}")
+                elif active_conv_id and matched_contact.get("conversation_id") and active_conv_id == matched_contact.get("conversation_id"):
+                    verified = True
+                    print(f"[Send Flow] ✅ Verified by conversation_id: {active_conv_id}")
+                else:
+                    # KHÔNG gửi nếu không xác thực được đúng người
+                    print(f"[Send Flow] ⛔ SKIPPED: Cannot verify chat is @{username}. "
+                          f"Scraped username='{active_username}', conv_id='{active_conv_id}'. "
+                          f"Expected username='{username}', conv_id='{matched_contact.get('conversation_id')}'. "
+                          f"Bỏ qua để tránh gửi nhầm!")
                     
-                    verified = False
-                    if active_username and active_username.lower() == username.lower():
-                        verified = True
-                    elif active_conv_id and active_conv_id == matched_contact.get("conversation_id"):
-                        verified = True
-                    elif not active_username:
-                        verified = True
-                        
-                    if verified:
-                        success, reason = send_and_verify_message(browser, wait, message_text, username)
-                        stat = {
-                            "username": username,
-                            "display_name": matched_contact["display_name"],
-                            "success": success,
-                            "reason": reason
-                        }
-                        stats.append(stat)
-                        sent_usernames.add(username)
-                        
-                        matched_contact["last_sent"] = "success" if success else "failed"
-                        matched_contact["last_sent_at"] = datetime.now().isoformat()
-                        if success:
-                            matched_contact["success_count"] = matched_contact.get("success_count", 0) + 1
-                        else:
-                            matched_contact["failure_count"] = matched_contact.get("failure_count", 0) + 1
-                            handle_send_failure(browser, username, reason)
-                        save_contacts(contacts)
+                if verified:
+                    success, reason = send_and_verify_message(browser, wait, message_text, username)
+                    stat = {
+                        "username": username,
+                        "display_name": matched_contact["display_name"],
+                        "success": success,
+                        "reason": reason
+                    }
+                    stats.append(stat)
+                    sent_usernames.add(username)
+                    
+                    matched_contact["last_sent"] = "success" if success else "failed"
+                    matched_contact["last_sent_at"] = datetime.now().isoformat()
+                    if success:
+                        matched_contact["success_count"] = matched_contact.get("success_count", 0) + 1
                     else:
-                        print(f"[Send Flow] Verification failed before sending: Scraped username @{active_username} does not match target @{username}")
+                        matched_contact["failure_count"] = matched_contact.get("failure_count", 0) + 1
+                        handle_send_failure(browser, username, reason)
+                    save_contacts(contacts)
                         
     remaining_targets = [c for c in enabled_contacts if c["username"] not in sent_usernames]
     if remaining_targets:
@@ -428,11 +566,22 @@ def send_messages_flow(browser, wait):
                     time.sleep(0.5)
                     browser.execute_script("arguments[0].click();", el)
                     clicked_indices.add(idx)
-                    time.sleep(2)
+                    # Chờ TikTok load profile header
+                    time.sleep(3)
                     
                     active_href, active_username = extract_active_chat_profile(browser)
+                    # Nếu chưa lấy được username, thử lại sau 2 giây
+                    if not active_username:
+                        time.sleep(2)
+                        active_href, active_username = extract_active_chat_profile(browser)
+                    
                     active_conv_id = extract_conversation_id(browser)
                     user_id, sec_uid = extract_ids_from_page(browser)
+                    
+                    # Nếu vẫn không lấy được bất kỳ thông tin định danh nào → bỏ qua
+                    if not active_username and not active_conv_id and not user_id and not sec_uid:
+                        print(f"[Send Flow] Slow-match: Cannot identify user for sidebar '{name_in_sidebar}'. Skipping to avoid wrong send.")
+                        continue
                     
                     scraped_info = {
                         "username": active_username,

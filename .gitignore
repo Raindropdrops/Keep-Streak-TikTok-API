@@ -3,6 +3,8 @@
 .env
 /__pycache__
 contacts.json
+message_history.json
+cookies.json
 logs/
 api.php
 index.php

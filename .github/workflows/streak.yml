@@ -54,7 +54,9 @@ jobs:
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
-          path: contacts.json
+          path: |
+            contacts.json
+            message_history.json
           key: tiktok-streak-contacts-v2-${{ github.run_id }}
           restore-keys: |
             tiktok-streak-contacts-v2-
@@ -64,6 +66,16 @@ jobs:
           TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
           TIKTOK_PASSWORD: ${{ secrets.TIKTOK_PASSWORD }}
           CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
+          # Tin nhắn — pool chung và theo từng ngày
+          MESSAGES: ${{ secrets.MESSAGES }}
+          MESSAGE_MON: ${{ secrets.MESSAGE_MON }}
+          MESSAGE_TUE: ${{ secrets.MESSAGE_TUE }}
+          MESSAGE_WED: ${{ secrets.MESSAGE_WED }}
+          MESSAGE_THU: ${{ secrets.MESSAGE_THU }}
+          MESSAGE_FRI: ${{ secrets.MESSAGE_FRI }}
+          MESSAGE_SAT: ${{ secrets.MESSAGE_SAT }}
+          MESSAGE_SUN: ${{ secrets.MESSAGE_SUN }}
+          # Tương thích ngược với biến cũ
           MESSAGE: ${{ secrets.MESSAGE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -102,8 +114,10 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: contacts.json
-          key: tiktok-streak-contacts-v2-${{ github.run_id }}-${{ github.run_number }}
+          path: |
+            contacts.json
+            message_history.json
+          key: tiktok-streak-contacts-v2-${{ github.run_id }}
 
       - name: Upload Logs on Failure
         if: failure()
