@@ -427,6 +427,136 @@ def normalize_name(text):
         result = result.replace(ch, '')
     return result.strip()
 
+def normalize_username(value):
+    if not isinstance(value, str):
+        return ""
+    return normalize_name(value).lstrip("@").casefold()
+
+
+def is_contact_enabled(contact):
+    value = contact.get("enabled")
+    return value is True or (
+        isinstance(value, int) and not isinstance(value, bool) and value == 1
+    )
+
+
+def recipient_is_verified(contact, active_username, active_conv_id=None):
+    expected_username = normalize_username(contact.get("username"))
+    actual_username = normalize_username(active_username)
+    if not expected_username or actual_username != expected_username:
+        return False
+
+    expected_conv_id = str(contact.get("conversation_id") or "").strip()
+    actual_conv_id = str(active_conv_id or "").strip()
+    if expected_conv_id and actual_conv_id and expected_conv_id != actual_conv_id:
+        return False
+
+    return True
+
+
+def get_safe_enabled_contacts(contacts):
+    username_counts = {}
+    for contact in contacts:
+        if not is_contact_enabled(contact):
+            continue
+        username = normalize_username(contact.get("username"))
+        if username:
+            username_counts[username] = username_counts.get(username, 0) + 1
+
+    safe_contacts = []
+    for contact in contacts:
+        if not is_contact_enabled(contact):
+            continue
+        username = normalize_username(contact.get("username"))
+        if not username:
+            print("[Send Flow] SKIPPED enabled contact with missing/invalid username.")
+            continue
+        if username_counts.get(username) != 1:
+            print(f"[Send Flow] SKIPPED duplicate enabled username: @{username}")
+            continue
+        safe_contacts.append(contact)
+    return safe_contacts
+
+
+def get_contact_sidebar_labels(contact, enabled_contacts):
+    label_owners = {}
+    for candidate in enabled_contacts:
+        raw_labels = [
+            candidate.get("username"),
+            candidate.get("display_name"),
+            *candidate.get("aliases", []),
+        ]
+        owner = normalize_username(candidate.get("username"))
+        for raw_label in raw_labels:
+            label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
+            if label:
+                label_owners.setdefault(label, set()).add(owner)
+
+    target_username = normalize_username(contact.get("username"))
+    labels = set()
+    raw_labels = [
+        contact.get("username"),
+        contact.get("display_name"),
+        *contact.get("aliases", []),
+    ]
+    for raw_label in raw_labels:
+        label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
+        if label and label_owners.get(label) == {target_username}:
+            labels.add(label)
+    return labels
+
+
+def find_unique_chat_element(browser, contact, enabled_contacts):
+    allowed_labels = get_contact_sidebar_labels(contact, enabled_contacts)
+    if not allowed_labels:
+        return None, "no_unique_sidebar_label"
+
+    matches = []
+    for element in find_chat_nickname_elements(browser):
+        try:
+            label = normalize_name(element.text).casefold()
+            if label in allowed_labels:
+                matches.append(element)
+        except Exception:
+            continue
+
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, "ambiguous_sidebar_label"
+    return None, "not_found"
+
+
+def click_chat_element(browser, element):
+    try:
+        browser.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        time.sleep(0.5)
+        browser.execute_script("arguments[0].click();", element)
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_verified_recipient(browser, contact, timeout_seconds=8):
+    deadline = time.time() + timeout_seconds
+    consecutive_matches = 0
+    last_profile = (None, None, None)
+
+    while time.time() < deadline:
+        active_href, active_username = extract_active_chat_profile(browser)
+        active_conv_id = extract_conversation_id(browser)
+        last_profile = (active_href, active_username, active_conv_id)
+        if recipient_is_verified(contact, active_username, active_conv_id):
+            consecutive_matches += 1
+            if consecutive_matches >= 2:
+                return True, last_profile
+        else:
+            consecutive_matches = 0
+        time.sleep(0.5)
+
+    return False, last_profile
+
+
 def click_chat_by_name(browser, name):
     normalized_name = normalize_name(name)
     elements = find_chat_nickname_elements(browser)
@@ -445,7 +575,8 @@ def click_chat_by_name(browser, name):
             continue
     return False
 
-def send_messages_flow(browser, wait):
+def _legacy_send_messages_flow_disabled(browser, wait):
+    raise RuntimeError("Unsafe legacy send flow is disabled.")
     print("[Send Flow] Starting auto-send flow...")
     browser.get('https://www.tiktok.com/messages?lang=vi')
     time.sleep(5)
@@ -664,6 +795,101 @@ def send_messages_flow(browser, wait):
         "details": stats
     }
 
+def send_messages_flow(browser, wait):
+    print("[Send Flow] Starting strict recipient flow...")
+    browser.get("https://www.tiktok.com/messages?lang=vi")
+    time.sleep(5)
+
+    if not is_logged_in(browser):
+        print("[Send Flow] Error: Cookie expired or not logged in.")
+        send_telegram_message(
+            os.getenv("TELEGRAM_BOT_TOKEN"),
+            os.getenv("TELEGRAM_CHAT_ID"),
+            "TikTok Streak Auto: cookie expired or login failed. No messages sent.",
+        )
+        return {"status": "failed", "reason": "cookie_expired"}
+
+    contacts = load_contacts()
+    enabled_contacts = get_safe_enabled_contacts(contacts)
+    if not enabled_contacts:
+        print("[Send Flow] No explicitly enabled, uniquely identified contacts.")
+        return {"status": "success", "sent_count": 0, "total_enabled": 0}
+
+    message_text = get_message_for_today()
+    stats = []
+    sent_usernames = set()
+    print("[Send Flow] Strict mode: exact username verification is mandatory.")
+
+    for contact in enabled_contacts:
+        username = contact["username"]
+        active_href, active_username = extract_active_chat_profile(browser)
+        active_conv_id = extract_conversation_id(browser)
+        verified = recipient_is_verified(contact, active_username, active_conv_id)
+
+        if not verified:
+            element, find_reason = find_unique_chat_element(
+                browser, contact, enabled_contacts
+            )
+            if element is None:
+                print(f"[Send Flow] SKIPPED @{username}: {find_reason}")
+                continue
+            if not click_chat_element(browser, element):
+                print(f"[Send Flow] SKIPPED @{username}: click_failed")
+                continue
+
+        verified, (_, active_username, active_conv_id) = (
+            wait_for_verified_recipient(browser, contact)
+        )
+        if not verified:
+            print(
+                f"[Send Flow] SKIPPED @{username}: recipient_not_verified "
+                f"(active_username={active_username!r}, "
+                f"active_conv_id={active_conv_id!r})"
+            )
+            continue
+
+        print(f"[Send Flow] Verified exact recipient: @{username}")
+        success, reason = send_and_verify_message(
+            browser, wait, message_text, username
+        )
+        stats.append({
+            "username": username,
+            "display_name": contact.get("display_name", username),
+            "success": success,
+            "reason": reason,
+        })
+        sent_usernames.add(username)
+
+        contact["last_sent"] = "success" if success else "failed"
+        contact["last_sent_at"] = datetime.now().isoformat()
+        if success:
+            contact["success_count"] = contact.get("success_count", 0) + 1
+        else:
+            contact["failure_count"] = contact.get("failure_count", 0) + 1
+            handle_send_failure(browser, username, reason)
+        save_contacts(contacts)
+
+    for contact in enabled_contacts:
+        if contact["username"] in sent_usernames:
+            continue
+        stats.append({
+            "username": contact["username"],
+            "display_name": contact.get("display_name", contact["username"]),
+            "success": False,
+            "reason": "recipient_not_verified",
+        })
+
+    send_telegram_summary(stats, len(enabled_contacts))
+    success_count = sum(1 for stat in stats if stat["success"])
+    print(f"[Send Flow] Completed. Success: {success_count}/{len(enabled_contacts)}")
+    return {
+        "status": "success",
+        "sent_count": success_count,
+        "total_enabled": len(enabled_contacts),
+        "details": stats,
+    }
+
+
 CONTACTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "contacts.json")
 FRIENDS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "friends.csv")
 
@@ -721,16 +947,18 @@ def load_contacts():
                             c["aliases"] = []
                         
                         # Handle fields correctly as they might be stored as numeric or string in MySQL
-                        c["enabled"] = bool(int(c.get("enabled", 1)))
+                        c["enabled"] = is_contact_enabled(c)
                         c["success_count"] = int(c.get("success_count", 0))
                         c["failure_count"] = int(c.get("failure_count", 0))
                         normalized.append(c)
                     return normalized
                 else:
                     print(f"[Remote DB Error] Invalid API response format (expected list): {data}")
+                    return []
         except Exception as e:
             print(f"[Remote DB Error] Failed to load contacts from API: {e}")
-            print("[Remote DB] Falling back to local contacts.json...")
+            print("[Remote DB] Refusing stale local fallback. No contacts will be used.")
+            return []
 
     # If contacts.json exists, load it
     if os.path.exists(CONTACTS_FILE):
@@ -801,7 +1029,8 @@ def save_contacts(contacts):
         except Exception as e:
             print(f"[Remote DB Error] Failed to save contacts to API: {e}")
 
-def update_contact_in_list(contacts, scraped_info):
+def _legacy_update_contact_in_list_disabled(contacts, scraped_info):
+    raise RuntimeError("Unsafe legacy contact matching is disabled.")
     """
     Updates or inserts a contact in the contacts list based on scraped info.
     Returns (updated_contact, is_new)
@@ -893,6 +1122,57 @@ def update_contact_in_list(contacts, scraped_info):
     
     return matched_contact, is_new
 
+
+def update_contact_in_list(contacts, scraped_info):
+    scraped_username = normalize_username(scraped_info.get("username"))
+    if not scraped_username:
+        return None, False
+
+    matched_contact = None
+    for contact in contacts:
+        if normalize_username(contact.get("username")) == scraped_username:
+            matched_contact = contact
+            break
+
+    is_new = matched_contact is None
+    if is_new:
+        matched_contact = get_default_contact(
+            scraped_username, scraped_info.get("display_name")
+        )
+        matched_contact["enabled"] = False
+        contacts.append(matched_contact)
+
+    aliases = matched_contact.get("aliases")
+    if not isinstance(aliases, list):
+        aliases = []
+        matched_contact["aliases"] = aliases
+
+    scraped_display_name = scraped_info.get("display_name")
+    current_display_name = matched_contact.get("display_name")
+    if (
+        isinstance(scraped_display_name, str)
+        and scraped_display_name.strip()
+        and scraped_display_name != current_display_name
+    ):
+        if current_display_name and current_display_name not in aliases:
+            aliases.append(current_display_name)
+        matched_contact["display_name"] = scraped_display_name
+
+    profile_url = scraped_info.get("profile_url")
+    if profile_url:
+        matched_contact["profile_url"] = profile_url
+    else:
+        matched_contact["profile_url"] = f"https://www.tiktok.com/@{scraped_username}"
+
+    for field in ("conversation_id", "user_id", "sec_uid"):
+        value = scraped_info.get(field)
+        if value:
+            matched_contact[field] = value
+
+    matched_contact["last_resolved_at"] = datetime.now().isoformat()
+    matched_contact["resolve_confidence"] = "high"
+    return matched_contact, is_new
+
 def is_logged_in(browser):
     current_url = browser.current_url
     if "/login" in current_url:
@@ -964,7 +1244,8 @@ def scroll_chat_list(browser):
         print(f"[Debug] Scroll script error: {e}")
         return {"success": False}
 
-def extract_active_chat_profile(browser):
+def _legacy_extract_active_chat_profile_disabled(browser):
+    raise RuntimeError("Unsafe page-wide profile extraction is disabled.")
     my_username = os.getenv("TIKTOK_USERNAME")
     
     # 1. Thử tìm trong các container tiêu đề chat trước (Ưu tiên cao nhất)
@@ -1026,6 +1307,43 @@ def extract_active_chat_profile(browser):
     except:
         pass
         
+    return None, None
+
+
+def extract_active_chat_profile(browser):
+    my_username = normalize_username(os.getenv("TIKTOK_USERNAME"))
+    header_selectors = [
+        "[data-e2e='chat-header']",
+        "div[class*='DivChatHeader']",
+        "div[class*='ChatHeader']",
+        "[class*='ChatHeader']",
+    ]
+
+    for container_selector in header_selectors:
+        try:
+            containers = browser.find_elements(By.CSS_SELECTOR, container_selector)
+        except Exception:
+            continue
+        for container in containers:
+            try:
+                if hasattr(container, "is_displayed") and not container.is_displayed():
+                    continue
+                links = container.find_elements(By.CSS_SELECTOR, "a[href*='/@']")
+            except Exception:
+                continue
+            for link in links:
+                try:
+                    href = link.get_attribute("href")
+                except Exception:
+                    continue
+                match = re.search(r"/@([^/?#]+)", href or "")
+                if not match:
+                    continue
+                username = match.group(1)
+                if normalize_username(username) == my_username:
+                    continue
+                return href, username
+
     return None, None
 
 def extract_active_chat_display_name(browser, profile_element_text=None):
@@ -1157,7 +1475,9 @@ def resolve_contacts_flow(browser, wait):
                 
             display_name = extract_active_chat_display_name(browser, sidebar_name)
             conversation_id = extract_conversation_id(browser)
-            user_id, sec_uid = extract_ids_from_page(browser)
+            # IDs found in page-wide scripts are not scoped to the active chat.
+            # Never persist them because they can belong to another account.
+            user_id, sec_uid = None, None
             
             scraped_info = {
                 "username": username,
@@ -1189,6 +1509,3 @@ def resolve_contacts_flow(browser, wait):
         "resolved_count": resolved_count,
         "new_discovered_count": new_discovered_count
     }
-
-
-

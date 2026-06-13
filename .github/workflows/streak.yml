@@ -1,5 +1,12 @@
 name: TikTok Streak Auto Send
 
+permissions:
+  contents: read
+
+concurrency:
+  group: tiktok-streak-send
+  cancel-in-progress: false
+
 on:
   schedule:
     # Chạy hàng ngày lúc 21:00 UTC (04:00 sáng giờ Việt Nam)
@@ -7,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       resolve_contacts:
-        description: 'Chạy Resolver cập nhật danh bạ trước khi gửi?'
+        description: 'Chỉ chạy Resolver (không gửi tin nhắn)?'
         type: boolean
         required: false
         default: false
@@ -50,6 +57,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
 
+      - name: Run recipient safety tests
+        run: python -m unittest discover -s tests -v
+
       - name: Restore contacts cache
         id: cache-restore
         uses: actions/cache/restore@v4
@@ -84,14 +94,6 @@ jobs:
         run: |
           ARGS=""
           
-          # Tự động chạy resolver vào Thứ Hai hàng tuần hoặc khi kích hoạt thủ công
-          RUN_RESOLVER="false"
-          if [ "${{ github.event.inputs.resolve_contacts }}" = "true" ]; then
-            RUN_RESOLVER="true"
-          elif [ "${{ github.event_name }}" = "schedule" ] && [ "$(date +%u)" = "1" ]; then
-            RUN_RESOLVER="true"
-          fi
-          
           # Setup debug flags
           if [ "${{ github.event.inputs.debug_screenshots }}" = "true" ]; then
             ARGS="$ARGS --debug-screenshots"
@@ -100,14 +102,14 @@ jobs:
             ARGS="$ARGS --debug-html"
           fi
           
-          # Chạy resolver nếu được yêu cầu
-          if [ "$RUN_RESOLVER" = "true" ]; then
-            echo "Kích hoạt Contact Resolver..."
+          # Resolver is manual-only and never sends in the same run.
+          if [ "${{ github.event.inputs.resolve_contacts }}" = "true" ]; then
+            echo "Running contact resolver only; message sending is disabled."
             python streak_bot.py --resolve-contacts $ARGS
+            exit 0
           fi
           
-          # Luôn chạy gửi tin nhắn
-          echo "Bắt đầu gửi tin nhắn..."
+          echo "Starting strict recipient send flow..."
           python streak_bot.py --send $ARGS
 
       - name: Save contacts cache
@@ -126,4 +128,3 @@ jobs:
           name: error-logs
           path: logs/
           if-no-files-found: ignore
-
