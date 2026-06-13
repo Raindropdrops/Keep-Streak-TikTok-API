@@ -1,11 +1,69 @@
 import unittest
 from unittest.mock import Mock, patch
 import urllib.error
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import utils
 
 
 class RecipientSafetyTests(unittest.TestCase):
+    def test_message_pool_uses_vietnam_weekday_configuration(self):
+        monday = datetime(2026, 6, 15, 4, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        with patch.dict(
+            utils.os.environ,
+            {
+                "MESSAGE_MON": "Lời chúc thứ Hai 1|Lời chúc thứ Hai 2",
+                "MESSAGES": "Pool chung",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                utils._get_message_pool(monday),
+                ["Lời chúc thứ Hai 1", "Lời chúc thứ Hai 2"],
+            )
+
+    def test_old_streak_history_is_not_reused_after_pool_changes(self):
+        monday = datetime(2026, 6, 15, 4, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        with patch.dict(
+            utils.os.environ,
+            {"MESSAGE_MON": "Chúc ngày mới vui vẻ|Chúc tuần mới thuận lợi"},
+            clear=True,
+        ):
+            with patch("utils.get_vietnam_now", return_value=monday):
+                with patch(
+                    "utils._load_message_history",
+                    return_value=[{"date": "2026-06-15", "message": "streak"}],
+                ):
+                    with patch("utils._save_message_history"):
+                        message = utils.get_message_for_today()
+
+        self.assertIn(
+            message,
+            ["Chúc ngày mới vui vẻ", "Chúc tuần mới thuận lợi"],
+        )
+        self.assertNotEqual(message, "streak")
+
+    def test_weekly_pool_avoids_previous_message_from_same_pool(self):
+        monday = datetime(2026, 6, 15, 4, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        with patch.dict(
+            utils.os.environ,
+            {"MESSAGE_MON": "Câu thứ nhất|Câu thứ hai"},
+            clear=True,
+        ):
+            with patch("utils.get_vietnam_now", return_value=monday):
+                with patch(
+                    "utils._load_message_history",
+                    return_value=[
+                        {"date": "2026-06-08", "message": "Câu thứ nhất"},
+                        {"date": "2026-06-14", "message": "Tin Chủ Nhật"},
+                    ],
+                ):
+                    with patch("utils._save_message_history"):
+                        self.assertEqual(
+                            utils.get_message_for_today(), "Câu thứ hai"
+                        )
+
     def test_enabled_must_be_explicit_boolean_or_integer_one(self):
         self.assertTrue(utils.is_contact_enabled({"enabled": True}))
         self.assertTrue(utils.is_contact_enabled({"enabled": 1}))

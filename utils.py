@@ -5,8 +5,9 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
-import time, re, csv, os, json, random
+import time, re, csv, os, json, random, sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 try:
     from ocacaptcha import oca_solve_captcha
@@ -14,6 +15,12 @@ except ImportError:
     oca_solve_captcha = None
 
 load_dotenv()
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 def init_browser(headless=True):
@@ -263,6 +270,56 @@ MESSAGE_HISTORY_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "message_history.json"
 )
 
+VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+DAY_MESSAGE_ENV = {
+    0: "MESSAGE_MON",
+    1: "MESSAGE_TUE",
+    2: "MESSAGE_WED",
+    3: "MESSAGE_THU",
+    4: "MESSAGE_FRI",
+    5: "MESSAGE_SAT",
+    6: "MESSAGE_SUN",
+}
+DEFAULT_DAILY_MESSAGES = {
+    0: [
+        "Chúc bạn tuần mới nhiều năng lượng, mọi việc đều thuận lợi nhé!",
+        "Tuần mới bắt đầu rồi, chúc bạn có thật nhiều niềm vui và may mắn!",
+    ],
+    1: [
+        "Chúc bạn một ngày thứ Ba nhẹ nhàng, làm gì cũng suôn sẻ nhé!",
+        "Hôm nay nhớ dành một chút thời gian nghỉ ngơi và chăm sóc bản thân nha!",
+    ],
+    2: [
+        "Đã giữa tuần rồi, chúc bạn luôn giữ được năng lượng tích cực nhé!",
+        "Chúc bạn một ngày bình an và có thêm nhiều niềm vui nho nhỏ!",
+    ],
+    3: [
+        "Chúc bạn hôm nay làm việc hiệu quả và gặp nhiều chuyện dễ thương nhé!",
+        "Cuối tuần đang đến gần rồi, cố gắng thêm một chút và nhớ nghỉ ngơi nha!",
+    ],
+    4: [
+        "Thứ Sáu rồi, chúc bạn kết thúc tuần thật trọn vẹn và vui vẻ!",
+        "Chúc bạn hôm nay nhiều niềm vui, tối đến được thư giãn thật thoải mái!",
+    ],
+    5: [
+        "Cuối tuần rồi, chúc bạn có thời gian nghỉ ngơi và làm điều mình thích nhé!",
+        "Chúc bạn một ngày thứ Bảy thật vui, nhẹ nhàng và nhiều tiếng cười!",
+    ],
+    6: [
+        "Chủ Nhật bình yên nhé, mong bạn có một ngày thật thư thái bên những người thân yêu!",
+        "Chúc bạn nghỉ ngơi thật tốt để sẵn sàng cho một tuần mới nhiều điều hay!",
+    ],
+}
+
+
+def get_vietnam_now():
+    return datetime.now(VIETNAM_TIMEZONE)
+
+
+def _split_message_pool(value):
+    return [message.strip() for message in value.split("|") if message.strip()]
+
+
 def _load_message_history():
     """Đọc lịch sử tin nhắn đã gửi."""
     if os.path.exists(MESSAGE_HISTORY_FILE):
@@ -285,17 +342,27 @@ def _save_message_history(history):
     except Exception as e:
         print(f"[Message History] Lỗi ghi lịch sử: {e}")
 
-def _get_message_pool():
-    """Lấy toàn bộ pool câu từ biến môi trường MESSAGES."""
-    pool_val = os.getenv("MESSAGES", "").strip()
-    if pool_val:
-        pool = [m.strip() for m in pool_val.split("|") if m.strip()]
+def _get_message_pool(now=None):
+    """Lấy pool theo đúng thứ tại Việt Nam, rồi mới dùng pool chung."""
+    now = now or get_vietnam_now()
+    day_env_name = DAY_MESSAGE_ENV[now.weekday()]
+    day_value = os.getenv(day_env_name, "").strip()
+    if day_value:
+        pool = _split_message_pool(day_value)
         if pool:
             return pool
+
+    pool_val = os.getenv("MESSAGES", "").strip()
+    if pool_val:
+        pool = _split_message_pool(pool_val)
+        if pool:
+            return pool
+
     legacy = os.getenv("MESSAGE", "").strip()
     if legacy:
         return [legacy]
-    return ["streak"]
+
+    return DEFAULT_DAILY_MESSAGES[now.weekday()]
 
 def get_message_for_today():
     """
@@ -309,18 +376,20 @@ def get_message_for_today():
       4. Random chọn 1 câu từ tập còn lại.
       5. Lưu lịch sử.
     """
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    now = get_vietnam_now()
+    today_str = now.strftime("%Y-%m-%d")
     history = _load_message_history()
+    pool = _get_message_pool(now)
 
     # Bước 1: Idempotent — cùng ngày luôn trả về cùng câu
     for entry in history:
         if entry.get("date") == today_str:
-            msg = entry.get("message", "streak")
-            print(f"[Message] Hôm nay ({today_str}) đã chọn: '{msg}'")
-            return msg
+            msg = entry.get("message", "")
+            if msg in pool:
+                print(f"[Message] Hôm nay ({today_str}) đã chọn: '{msg}'")
+                return msg
 
     # Bước 2: Lấy pool và tính cửa sổ tránh lặp
-    pool = _get_message_pool()
     no_repeat_window = max(1, min(7, len(pool) - 1)) if len(pool) > 1 else 0
     print(f"[Message] Pool: {len(pool)} câu | Cửa sổ tránh lặp: {no_repeat_window} ngày")
 
@@ -328,8 +397,11 @@ def get_message_for_today():
     recent_messages = set()
     if no_repeat_window > 0:
         recent_entries = sorted(history, key=lambda x: x["date"], reverse=True)
-        for entry in recent_entries[:no_repeat_window]:
-            recent_messages.add(entry.get("message", ""))
+        same_pool_entries = [
+            entry for entry in recent_entries if entry.get("message") in pool
+        ]
+        for entry in same_pool_entries[:no_repeat_window]:
+            recent_messages.add(entry["message"])
 
     available = [m for m in pool if m not in recent_messages]
 
