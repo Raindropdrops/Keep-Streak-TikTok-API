@@ -2,6 +2,8 @@ import unittest
 from unittest.mock import Mock, patch
 import urllib.error
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from zoneinfo import ZoneInfo
 
 import utils
@@ -167,6 +169,9 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertNotIn("a[href*='/@']", requested_selectors)
 
     @patch("utils.time.sleep")
+    @patch("utils._load_delivery_history", return_value={})
+    @patch("utils.save_contacts")
+    @patch("utils.handle_send_failure")
     @patch("utils.send_telegram_summary")
     @patch("utils.send_and_verify_message")
     @patch("utils.find_unique_chat_element", return_value=(None, "not_found"))
@@ -185,6 +190,9 @@ class RecipientSafetyTests(unittest.TestCase):
         _find_chat,
         send_message,
         _telegram,
+        _handle_failure,
+        _save_contacts,
+        _delivery_history,
         _sleep,
     ):
         load_contacts.return_value = [
@@ -207,10 +215,12 @@ class RecipientSafetyTests(unittest.TestCase):
         send_message.assert_not_called()
         self.assertEqual(result["sent_count"], 0)
         self.assertEqual(
-            result["details"][0]["reason"], "recipient_not_verified"
+            result["details"][0]["reason"], "not_found"
         )
+        self.assertEqual(result["status"], "partial")
 
     @patch("utils.time.sleep")
+    @patch("utils._load_delivery_history", return_value={})
     @patch("utils.save_contacts")
     @patch("utils.send_telegram_summary")
     @patch("utils.send_and_verify_message", return_value=(True, "success"))
@@ -232,6 +242,7 @@ class RecipientSafetyTests(unittest.TestCase):
         send_message,
         _telegram,
         _save_contacts,
+        _delivery_history,
         _sleep,
     ):
         load_contacts.return_value = [
@@ -247,6 +258,69 @@ class RecipientSafetyTests(unittest.TestCase):
 
         send_message.assert_called_once()
         self.assertEqual(result["sent_count"], 1)
+        self.assertEqual(result["status"], "success")
+
+    def test_delivery_history_prevents_duplicate_send_on_catch_up_run(self):
+        now = datetime(2026, 6, 13, 6, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        contact = {
+            "username": "right_user",
+            "last_sent": None,
+            "last_sent_at": None,
+        }
+        history = {"2026-06-13": ["right_user"]}
+
+        self.assertTrue(utils.contact_was_sent_today(contact, history, now))
+
+    def test_historical_naive_runner_timestamp_is_treated_as_utc(self):
+        now = datetime(2026, 6, 13, 6, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        contact = {
+            "username": "right_user",
+            "last_sent": "success",
+            "last_sent_at": "2026-06-12T22:30:00",
+        }
+
+        self.assertTrue(utils.contact_was_sent_today(contact, {}, now))
+
+    def test_mark_contact_sent_today_persists_vietnam_date(self):
+        now = datetime(2026, 6, 13, 4, 5, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+        contact = {"username": "right_user"}
+        with TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "delivery_history.json"
+            with patch("utils.DELIVERY_HISTORY_FILE", str(history_path)):
+                utils.mark_contact_sent_today(contact, {}, now)
+                saved = utils._load_delivery_history()
+
+        self.assertEqual(saved, {"2026-06-13": ["right_user"]})
+        self.assertEqual(contact["last_sent"], "success")
+        self.assertEqual(contact["last_sent_at"], now.isoformat())
+
+    @patch("utils.time.sleep")
+    @patch("utils.dismiss_blocking_overlays")
+    @patch(
+        "utils.wait_for_verified_recipient",
+        return_value=(True, (None, "right_user", None)),
+    )
+    @patch(
+        "utils.send_and_verify_message",
+        side_effect=[(False, "click_intercepted"), (True, "success")],
+    )
+    def test_retry_reverifies_recipient_before_second_attempt(
+        self,
+        send_message,
+        verify_recipient,
+        dismiss_overlay,
+        _sleep,
+    ):
+        contact = {"username": "right_user"}
+        with patch("config.MAX_RETRIES_PER_CONTACT", 2):
+            result = utils.send_to_verified_contact(
+                Mock(), Mock(), contact, "hello"
+            )
+
+        self.assertEqual(result, (True, "success"))
+        self.assertEqual(send_message.call_count, 2)
+        self.assertEqual(verify_recipient.call_count, 4)
+        self.assertGreaterEqual(dismiss_overlay.call_count, 3)
 
 
 if __name__ == "__main__":

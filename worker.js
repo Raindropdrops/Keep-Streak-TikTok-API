@@ -3,8 +3,6 @@
  * Bound D1 Database: DB
  */
 
-const API_KEY = "123456du"; // Thay đổi khóa bảo mật của bạn ở đây
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -30,9 +28,19 @@ export default {
 
     // --- 2. XỬ LÝ CÁC API ENDPOINTS (/api.php hoặc /api) ---
     if (path === "/api.php" || path === "/api") {
+      if (!env.API_KEY) {
+        return new Response(JSON.stringify({
+          status: "error",
+          message: "Worker API_KEY secret is not configured."
+        }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        });
+      }
+
       // Xác thực API Key
       const receivedKey = request.headers.get("x-api-key") || url.searchParams.get("api_key");
-      if (!receivedKey || receivedKey !== API_KEY) {
+      if (!receivedKey || receivedKey !== env.API_KEY) {
         return new Response(JSON.stringify({ status: "error", message: "Truy cập bị từ chối. API Key không hợp lệ." }), {
           status: 401,
           headers: { "Content-Type": "application/json", ...corsHeaders }

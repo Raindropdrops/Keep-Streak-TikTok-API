@@ -7,7 +7,13 @@ from dotenv import load_dotenv
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-from utils import init_browser, login_tiktok, resolve_contacts_flow, load_contacts
+from utils import (
+    init_browser,
+    is_logged_in,
+    login_tiktok,
+    resolve_contacts_flow,
+    load_contacts,
+)
 
 # Load environment variables
 load_dotenv()
@@ -33,44 +39,52 @@ def main():
         os.environ["DEBUG_HTML"] = "true"
         print("[CLI] HTML snapshots on failure enabled.")
         
-    print("[CLI] Initializing browser...")
-    browser, wait = init_browser()
-    
+    browser = None
     try:
-        # Perform login
         username = os.getenv("TIKTOK_USERNAME")
         password = os.getenv("TIKTOK_PASSWORD")
         if not username or not password:
             print("[CLI] Error: TIKTOK_USERNAME or TIKTOK_PASSWORD not set in environment.")
-            browser.quit()
-            return
-            
+            return 2
+
+        print("[CLI] Initializing browser...")
+        browser, wait = init_browser()
         print(f"[CLI] Logging in as {username}...")
         login_tiktok(browser, wait, username, password)
-        
+        if not is_logged_in(browser):
+            print("[CLI] Error: TikTok login failed.")
+            return 2
+
         # Ensure migration happens if contacts.json doesn't exist yet
         load_contacts()
-        
+
         if is_resolve:
             print("[CLI] Starting Contact Resolution Flow...")
             result = resolve_contacts_flow(browser, wait)
             print(f"[CLI] Contact Resolution completed: {result}")
-            
+            if result.get("status") != "success":
+                return 2
+
         if is_send:
             print("[CLI] Starting Auto Send Message Flow...")
             # We import send flow dynamically from utils
             from utils import send_messages_flow
             result = send_messages_flow(browser, wait)
             print(f"[CLI] Auto Send Message completed: {result}")
-            
+            if result.get("status") != "success":
+                return 2
+
+        return 0
     except Exception as e:
         print(f"[CLI] Fatal error during execution: {e}")
+        return 2
     finally:
         print("[CLI] Quitting browser...")
-        try:
-            browser.quit()
-        except:
-            pass
+        if browser is not None:
+            try:
+                browser.quit()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

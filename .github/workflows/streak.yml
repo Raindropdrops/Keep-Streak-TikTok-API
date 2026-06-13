@@ -10,7 +10,9 @@ concurrency:
 on:
   schedule:
     # Chạy hàng ngày lúc 21:00 UTC (04:00 sáng giờ Việt Nam)
-    - cron: '0 21 * * *'
+    - cron: '0 21 * * *' # 04:00 Vietnam
+    - cron: '0 23 * * *' # 06:00 Vietnam catch-up
+    - cron: '0 1 * * *'  # 08:00 Vietnam final catch-up
   workflow_dispatch:
     inputs:
       resolve_contacts:
@@ -25,6 +27,11 @@ on:
         default: false
       debug_html:
         description: 'Bật lưu mã HTML khi lỗi?'
+        type: boolean
+        required: false
+        default: false
+      validate_only:
+        description: 'Chỉ kiểm tra workflow, không mở bot gửi tin?'
         type: boolean
         required: false
         default: false
@@ -67,11 +74,34 @@ jobs:
           path: |
             contacts.json
             message_history.json
-          key: tiktok-streak-contacts-v2-${{ github.run_id }}
+            delivery_history.json
+          key: tiktok-streak-state-v3-${{ github.run_id }}
           restore-keys: |
-            tiktok-streak-contacts-v2-
+            tiktok-streak-state-v3-
+
+      - name: Materialize TikTok cookies
+        env:
+          TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("TIKTOK_COOKIES", "").strip()
+          if not raw:
+              raise SystemExit("TIKTOK_COOKIES secret is missing")
+          cookies = json.loads(raw)
+          if not isinstance(cookies, (list, dict)):
+              raise SystemExit("TIKTOK_COOKIES must contain JSON cookies")
+          Path("cookies.json").write_text(
+              json.dumps(cookies, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PY
 
       - name: Run Streak Bot
+        if: github.event.inputs.validate_only != 'true'
         env:
           TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
           TIKTOK_PASSWORD: ${{ secrets.TIKTOK_PASSWORD }}
@@ -91,6 +121,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
+          MAX_RETRIES_PER_CONTACT: '4'
+          DAILY_COOLDOWN: 'true'
         run: |
           ARGS=""
           
@@ -112,6 +144,10 @@ jobs:
           echo "Starting strict recipient send flow..."
           python streak_bot.py --send $ARGS
 
+      - name: Validation-only confirmation
+        if: github.event.inputs.validate_only == 'true'
+        run: echo "Workflow, tests, Chrome, cache, and cookie secret validation passed."
+
       - name: Save contacts cache
         if: always()
         uses: actions/cache/save@v4
@@ -119,7 +155,8 @@ jobs:
           path: |
             contacts.json
             message_history.json
-          key: tiktok-streak-contacts-v2-${{ github.run_id }}
+            delivery_history.json
+          key: tiktok-streak-state-v3-${{ github.run_id }}
 
       - name: Upload Logs on Failure
         if: failure()

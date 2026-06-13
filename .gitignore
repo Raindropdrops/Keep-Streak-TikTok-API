@@ -4,6 +4,8 @@
 __pycache__/
 contacts.json
 message_history.json
+delivery_history.json
+run_history.json
 cookies.json
 logs/
 api.php

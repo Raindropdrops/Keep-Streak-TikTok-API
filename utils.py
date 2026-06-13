@@ -5,8 +5,13 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    StaleElementReferenceException,
+    WebDriverException,
+)
 import time, re, csv, os, json, random, sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 try:
@@ -27,6 +32,9 @@ def init_browser(headless=True):
     from config import USER_AGENT
     chrome_options = Options()
     chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1440,1000")
     chrome_options.add_argument(f"user-agent={USER_AGENT}")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -34,6 +42,7 @@ def init_browser(headless=True):
     if headless:
         chrome_options.add_argument("--headless=new")
     browser = webdriver.Chrome(options=chrome_options)
+    browser.set_page_load_timeout(60)
     
     # Xoá flag navigator.webdriver để tránh bị TikTok phát hiện bot
     try:
@@ -196,22 +205,22 @@ def send_telegram_message(token, chat_id, text):
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url, 
-            data=data, 
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return response.read()
-    except Exception as e:
-        print(f"Failed to send Telegram message: {e}")
+    chunks = [text[i:i + 3500] for i in range(0, len(text), 3500)] or [""]
+    response_body = None
+    for chunk in chunks:
+        payload = {"chat_id": chat_id, "text": chunk}
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                response_body = response.read()
+        except Exception as e:
+            print(f"Failed to send Telegram message: {e}")
+    return response_body
 
 def save_debug_info(browser, prefix, save_html=False):
     os.makedirs("logs", exist_ok=True)
@@ -237,37 +246,43 @@ def handle_send_failure(browser, username, reason):
     save_html = os.getenv("DEBUG_HTML", "false").lower() == "true"
     save_debug_info(browser, f"error_{username}_{reason}", save_html=save_html)
 
+# === HỆ THỐNG TIN NHẮN THÔNG MINH KHÔNG LẶP ===
 def send_telegram_summary(stats, total_enabled):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         print("[Telegram] Telegram credentials not set. Skipping notification.")
         return
-        
-    successes = [s for s in stats if s["success"]]
-    failures = [s for s in stats if not s["success"]]
-    
-    message = "🔔 *TikTok Streak Auto Report* 🔔\n\n"
-    message += f"📊 *Trạng thái:* {len(successes)}/{total_enabled} thành công\n"
-    
-    if successes:
-        message += "\n✅ *Thành công:*\n"
-        for s in successes:
-            message += f"- @{s['username']} ({s['display_name']})\n"
-            
+
+    delivered = [stat for stat in stats if stat["success"]]
+    failures = [stat for stat in stats if not stat["success"]]
+    message = "TikTok Streak Auto Report\n\n"
+    message += f"Trang thai: {len(delivered)}/{total_enabled} da giao trong ngay\n"
+
     if failures:
-        message += "\n❌ *Thất bại:*\n"
-        for f in failures:
-            message += f"- @{f['username']} ({f['display_name']}): `{f['reason']}`\n"
-            
-    message += f"\n🕒 *Thời gian:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    
+        message += "\nCon thieu:\n"
+        for failure in failures[:25]:
+            message += (
+                f"- @{failure['username']} ({failure['display_name']}): "
+                f"{failure['reason']}\n"
+            )
+        if len(failures) > 25:
+            message += f"- ... va {len(failures) - 25} nguoi khac\n"
+
+    newly_sent = [s for s in delivered if s.get("reason") == "success"]
+    already_sent = [
+        s for s in delivered if s.get("reason") == "already_sent_today"
+    ]
+    message += f"\nMoi gui: {len(newly_sent)} | Da gui truoc do: {len(already_sent)}"
+    message += f"\nThoi gian VN: {get_vietnam_now().strftime('%Y-%m-%d %H:%M:%S')}"
     send_telegram_message(token, chat_id, message)
 
 
-# === HỆ THỐNG TIN NHẮN THÔNG MINH KHÔNG LẶP ===
 MESSAGE_HISTORY_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "message_history.json"
+)
+DELIVERY_HISTORY_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "delivery_history.json"
 )
 
 VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -314,6 +329,86 @@ DEFAULT_DAILY_MESSAGES = {
 
 def get_vietnam_now():
     return datetime.now(VIETNAM_TIMEZONE)
+
+
+def _load_delivery_history():
+    if not os.path.exists(DELIVERY_HISTORY_FILE):
+        return {}
+    try:
+        with open(DELIVERY_HISTORY_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        if isinstance(data, dict):
+            return {
+                str(date): [
+                    normalize_username(username)
+                    for username in usernames
+                    if normalize_username(username)
+                ]
+                for date, usernames in data.items()
+                if isinstance(usernames, list)
+            }
+    except Exception as e:
+        print(f"[Delivery History] Failed to read history: {e}")
+    return {}
+
+
+def _save_delivery_history(history):
+    cutoff = (get_vietnam_now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    trimmed = {
+        date: sorted(set(usernames))
+        for date, usernames in history.items()
+        if date >= cutoff and isinstance(usernames, list)
+    }
+    temp_path = f"{DELIVERY_HISTORY_FILE}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(trimmed, file, indent=2, ensure_ascii=False)
+        os.replace(temp_path, DELIVERY_HISTORY_FILE)
+    except Exception as e:
+        print(f"[Delivery History] Failed to save history: {e}")
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+
+
+def contact_was_sent_today(contact, history=None, now=None):
+    now = now or get_vietnam_now()
+    today = now.strftime("%Y-%m-%d")
+    username = normalize_username(contact.get("username"))
+    history = history if history is not None else _load_delivery_history()
+    if username and username in history.get(today, []):
+        return True
+
+    if contact.get("last_sent") != "success":
+        return False
+    raw_timestamp = contact.get("last_sent_at")
+    if not raw_timestamp:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            # Historical GitHub Actions timestamps were naive UTC values.
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(VIETNAM_TIMEZONE).strftime("%Y-%m-%d") == today
+    except (TypeError, ValueError):
+        return False
+
+
+def mark_contact_sent_today(contact, history=None, now=None):
+    now = now or get_vietnam_now()
+    history = history if history is not None else _load_delivery_history()
+    today = now.strftime("%Y-%m-%d")
+    username = normalize_username(contact.get("username"))
+    if username:
+        history.setdefault(today, [])
+        if username not in history[today]:
+            history[today].append(username)
+        _save_delivery_history(history)
+    contact["last_sent"] = "success"
+    contact["last_sent_at"] = now.isoformat()
+    return history
 
 
 def _split_message_pool(value):
@@ -421,9 +516,70 @@ def get_message_for_today():
     return chosen
 
 
+def _count_exact_message_occurrences(browser, message):
+    script = """
+    const target = arguments[0];
+    const nodes = document.querySelectorAll(
+      '[data-e2e*="message"], [class*="Message"], [class*="message"]'
+    );
+    return Array.from(nodes).filter((node) => {
+      const text = (node.innerText || node.textContent || '').trim();
+      return text === target;
+    }).length;
+    """
+    try:
+        count = browser.execute_script(script, message)
+        return int(count) if isinstance(count, (int, float)) else 0
+    except Exception:
+        return 0
+
+
+def dismiss_blocking_overlays(browser):
+    dismissed = False
+    try:
+        ActionChains(browser).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.3)
+    except Exception:
+        pass
+
+    selectors = [
+        "[data-e2e='modal-close-inner-button']",
+        "[aria-label='Close']",
+        "[aria-label='close']",
+        "div[class*='Modal'] button[class*='Close']",
+        "div[class*='Modal'] [class*='CloseButton']",
+    ]
+    for selector in selectors:
+        try:
+            for element in browser.find_elements(By.CSS_SELECTOR, selector):
+                if hasattr(element, "is_displayed") and not element.is_displayed():
+                    continue
+                browser.execute_script("arguments[0].click();", element)
+                dismissed = True
+                time.sleep(0.3)
+        except Exception:
+            continue
+    return dismissed
+
+
+def _message_input_is_empty(message_input):
+    try:
+        values = [
+            message_input.text,
+            message_input.get_attribute("textContent"),
+            message_input.get_attribute("innerText"),
+        ]
+        return all(not str(value or "").strip() for value in values)
+    except Exception:
+        return False
+
+
 def send_and_verify_message(browser, wait, message, contact_username):
     input_selectors = [
-        (By.CSS_SELECTOR, "div[contenteditable='true'][class*='public-DraftStyleDefault-block']"),
+        (
+            By.CSS_SELECTOR,
+            "div[contenteditable='true'][class*='public-DraftStyleDefault-block']",
+        ),
         (By.CSS_SELECTOR, "div[class*='public-DraftStyleDefault-block']"),
         (By.CSS_SELECTOR, "[data-e2e='message-input']"),
         (By.CSS_SELECTOR, "div[contenteditable='true']"),
@@ -431,60 +587,58 @@ def send_and_verify_message(browser, wait, message, contact_username):
     message_input = None
     for by, selector in input_selectors:
         try:
-            message_input = wait.until(EC.presence_of_element_located((by, selector)))
-            if message_input:
+            candidate = wait.until(EC.presence_of_element_located((by, selector)))
+            if candidate and (
+                not hasattr(candidate, "is_displayed") or candidate.is_displayed()
+            ):
+                message_input = candidate
                 break
-        except:
+        except Exception:
             continue
-            
+
     if not message_input:
         print(f"[Send] Error: Message input field not found for @{contact_username}")
         return False, "input_missing"
-        
+
+    before_count = _count_exact_message_occurrences(browser, message)
     try:
         message_input.click()
         time.sleep(0.5)
         message_input.send_keys(message)
-        time.sleep(1)
-        
+        time.sleep(0.5)
         message_input.send_keys(Keys.RETURN)
-        time.sleep(2)
-        
-        # Verify
-        input_cleared = False
-        try:
-            for by, selector in input_selectors:
-                try:
-                    message_input = browser.find_element(by, selector)
-                    if message_input:
-                        break
-                except:
-                    continue
-            if message_input:
-                text_remaining = message_input.text.strip()
-                if not text_remaining or text_remaining == "":
-                    input_cleared = True
-        except:
-            input_cleared = True
-            
-        message_appeared = False
-        try:
-            message_elements = browser.find_elements(By.XPATH, f"//*[contains(text(), '{message}')]")
-            if message_elements:
-                message_appeared = True
-        except:
-            pass
-            
-        if input_cleared or message_appeared:
-            print(f"[Send] Message verified successfully for @{contact_username}!")
-            return True, "success"
-        else:
-            print(f"[Send] Verification failed for @{contact_username}")
-            return False, "verify_failed"
-            
+
+        deadline = time.time() + 8
+        earliest_input_clear_success = time.time() + 1
+        while time.time() < deadline:
+            if _count_exact_message_occurrences(browser, message) > before_count:
+                print(f"[Send] Message verified successfully for @{contact_username}!")
+                return True, "success"
+            if (
+                time.time() >= earliest_input_clear_success
+                and _message_input_is_empty(message_input)
+            ):
+                print(
+                    f"[Send] Message input cleared after send for @{contact_username}."
+                )
+                return True, "success"
+            time.sleep(0.5)
+
+        print(f"[Send] Verification failed for @{contact_username}")
+        return False, "verify_failed"
+    except ElementClickInterceptedException as e:
+        print(f"[Send Error] Blocking overlay for @{contact_username}: {e}")
+        return False, "click_intercepted"
+    except StaleElementReferenceException as e:
+        print(f"[Send Error] Stale input for @{contact_username}: {e}")
+        return False, "stale_input"
+    except WebDriverException as e:
+        print(f"[Send Error] Browser error for @{contact_username}: {e}")
+        return False, "webdriver_error"
     except Exception as e:
         print(f"[Send Error] Exception sending to @{contact_username}: {e}")
-        return False, "send_button_missing"
+        return False, "send_failed"
+
 
 def normalize_name(text):
     """Loại bỏ ký tự Unicode ẩn (zero-width, variation selectors) để so sánh chuỗi tên chính xác hơn."""
@@ -867,6 +1021,58 @@ def _legacy_send_messages_flow_disabled(browser, wait):
         "details": stats
     }
 
+def send_to_verified_contact(browser, wait, contact, message):
+    from config import MAX_RETRIES_PER_CONTACT
+
+    username = contact["username"]
+    attempts = max(1, MAX_RETRIES_PER_CONTACT)
+    last_reason = "send_failed"
+
+    for attempt in range(1, attempts + 1):
+        verified, (_, active_username, active_conv_id) = (
+            wait_for_verified_recipient(browser, contact)
+        )
+        if not verified:
+            return False, "recipient_not_verified"
+
+        dismiss_blocking_overlays(browser)
+        verified, (_, active_username, active_conv_id) = (
+            wait_for_verified_recipient(browser, contact, timeout_seconds=4)
+        )
+        if not verified:
+            return False, "recipient_changed_after_overlay"
+
+        print(
+            f"[Send Flow] Sending to verified @{username}, "
+            f"attempt {attempt}/{attempts}"
+        )
+        success, last_reason = send_and_verify_message(
+            browser, wait, message, username
+        )
+        if success:
+            return True, "success"
+
+        retryable_reasons = {
+            "click_intercepted",
+            "input_missing",
+            "send_failed",
+            "stale_input",
+            "webdriver_error",
+        }
+        if attempt < attempts and last_reason in retryable_reasons:
+            dismiss_blocking_overlays(browser)
+            delay = min(8, 2 ** attempt)
+            print(
+                f"[Send Flow] Retry @{username} after {last_reason}; "
+                f"waiting {delay}s"
+            )
+            time.sleep(delay)
+        else:
+            break
+
+    return False, last_reason
+
+
 def send_messages_flow(browser, wait):
     print("[Send Flow] Starting strict recipient flow...")
     browser.get("https://www.tiktok.com/messages?lang=vi")
@@ -885,79 +1091,105 @@ def send_messages_flow(browser, wait):
     enabled_contacts = get_safe_enabled_contacts(contacts)
     if not enabled_contacts:
         print("[Send Flow] No explicitly enabled, uniquely identified contacts.")
-        return {"status": "success", "sent_count": 0, "total_enabled": 0}
+        return {
+            "status": "failed",
+            "reason": "no_enabled_contacts",
+            "sent_count": 0,
+            "delivered_count": 0,
+            "total_enabled": 0,
+        }
 
     message_text = get_message_for_today()
+    delivery_history = _load_delivery_history()
     stats = []
-    sent_usernames = set()
+    processed_usernames = set()
     print("[Send Flow] Strict mode: exact username verification is mandatory.")
 
     for contact in enabled_contacts:
         username = contact["username"]
+        display_name = contact.get("display_name", username)
+
+        if contact_was_sent_today(contact, delivery_history):
+            stats.append({
+                "username": username,
+                "display_name": display_name,
+                "success": True,
+                "reason": "already_sent_today",
+            })
+            processed_usernames.add(username)
+            print(f"[Send Flow] Already delivered today: @{username}")
+            continue
+
         active_href, active_username = extract_active_chat_profile(browser)
         active_conv_id = extract_conversation_id(browser)
         verified = recipient_is_verified(contact, active_username, active_conv_id)
+        failure_reason = None
 
         if not verified:
-            element, find_reason = find_unique_chat_element(
+            element, failure_reason = find_contact_chat_with_scroll(
                 browser, contact, enabled_contacts
             )
-            if element is None:
-                print(f"[Send Flow] SKIPPED @{username}: {find_reason}")
-                continue
-            if not click_chat_element(browser, element):
-                print(f"[Send Flow] SKIPPED @{username}: click_failed")
-                continue
+            if element is not None:
+                if click_chat_element(browser, element):
+                    failure_reason = None
+                else:
+                    failure_reason = "click_failed"
 
-        verified, (_, active_username, active_conv_id) = (
-            wait_for_verified_recipient(browser, contact)
-        )
-        if not verified:
-            print(
-                f"[Send Flow] SKIPPED @{username}: recipient_not_verified "
-                f"(active_username={active_username!r}, "
-                f"active_conv_id={active_conv_id!r})"
+        if failure_reason:
+            print(f"[Send Flow] SKIPPED @{username}: {failure_reason}")
+            success, reason = False, failure_reason
+        else:
+            success, reason = send_to_verified_contact(
+                browser, wait, contact, message_text
             )
-            continue
 
-        print(f"[Send Flow] Verified exact recipient: @{username}")
-        success, reason = send_and_verify_message(
-            browser, wait, message_text, username
-        )
         stats.append({
             "username": username,
-            "display_name": contact.get("display_name", username),
+            "display_name": display_name,
             "success": success,
             "reason": reason,
         })
-        sent_usernames.add(username)
+        processed_usernames.add(username)
 
-        contact["last_sent"] = "success" if success else "failed"
-        contact["last_sent_at"] = datetime.now().isoformat()
         if success:
+            delivery_history = mark_contact_sent_today(
+                contact, delivery_history
+            )
             contact["success_count"] = contact.get("success_count", 0) + 1
         else:
+            contact["last_sent"] = "failed"
+            contact["last_sent_at"] = get_vietnam_now().isoformat()
             contact["failure_count"] = contact.get("failure_count", 0) + 1
             handle_send_failure(browser, username, reason)
         save_contacts(contacts)
 
     for contact in enabled_contacts:
-        if contact["username"] in sent_usernames:
+        if contact["username"] in processed_usernames:
             continue
         stats.append({
             "username": contact["username"],
             "display_name": contact.get("display_name", contact["username"]),
             "success": False,
-            "reason": "recipient_not_verified",
+            "reason": "not_processed",
         })
 
-    send_telegram_summary(stats, len(enabled_contacts))
-    success_count = sum(1 for stat in stats if stat["success"])
-    print(f"[Send Flow] Completed. Success: {success_count}/{len(enabled_contacts)}")
+    total_enabled = len(enabled_contacts)
+    delivered_count = sum(1 for stat in stats if stat["success"])
+    newly_sent_count = sum(
+        1 for stat in stats
+        if stat["success"] and stat["reason"] == "success"
+    )
+    status = "success" if delivered_count == total_enabled else "partial"
+    send_telegram_summary(stats, total_enabled)
+    print(
+        f"[Send Flow] Completed. Delivered today: "
+        f"{delivered_count}/{total_enabled}; newly sent: {newly_sent_count}"
+    )
     return {
-        "status": "success",
-        "sent_count": success_count,
-        "total_enabled": len(enabled_contacts),
+        "status": status,
+        "sent_count": newly_sent_count,
+        "delivered_count": delivered_count,
+        "total_enabled": total_enabled,
         "details": stats,
     }
 
@@ -1271,7 +1503,12 @@ def find_chat_nickname_elements(browser):
         try:
             elements = browser.find_elements(by, selector)
             if elements:
-                filtered = [el for el in elements if el.text.strip()]
+                filtered = [
+                    el
+                    for el in elements
+                    if el.text.strip()
+                    and (not hasattr(el, "is_displayed") or el.is_displayed())
+                ]
                 if filtered:
                     return filtered
         except:
@@ -1315,6 +1552,55 @@ def scroll_chat_list(browser):
     except Exception as e:
         print(f"[Debug] Scroll script error: {e}")
         return {"success": False}
+
+def set_chat_list_position(browser, ratio):
+    ratio = max(0.0, min(1.0, float(ratio)))
+    script = """
+    const ratio = arguments[0];
+    let scrollable = document.querySelector('div[class*="DivSideNav"]') ||
+                     document.querySelector('div[class*="SideNav"]') ||
+                     document.querySelector('[class*="MessageList"]') ||
+                     document.querySelector('[class*="ConversationList"]') ||
+                     document.querySelector('[class*="ScrollContainer"]');
+    if (!scrollable) {
+      const nick = document.querySelector('[class*="Nickname"]');
+      let parent = nick ? nick.parentElement : null;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        if (style.overflowY === 'scroll' || style.overflowY === 'auto' ||
+            parent.scrollHeight > parent.clientHeight) {
+          scrollable = parent;
+          break;
+        }
+        parent = parent.parentElement;
+      }
+    }
+    if (!scrollable) return false;
+    scrollable.scrollTop =
+      (scrollable.scrollHeight - scrollable.clientHeight) * ratio;
+    return true;
+    """
+    try:
+        return bool(browser.execute_script(script, ratio))
+    except Exception:
+        return False
+
+
+def find_contact_chat_with_scroll(browser, contact, enabled_contacts):
+    last_reason = "not_found"
+    for ratio in (0.0, 0.25, 0.5, 0.75, 1.0):
+        set_chat_list_position(browser, ratio)
+        time.sleep(0.8)
+        element, reason = find_unique_chat_element(
+            browser, contact, enabled_contacts
+        )
+        if element is not None:
+            return element, None
+        if reason != "not_found":
+            last_reason = reason
+            break
+    return None, last_reason
+
 
 def _legacy_extract_active_chat_profile_disabled(browser):
     raise RuntimeError("Unsafe page-wide profile extraction is disabled.")
