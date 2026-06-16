@@ -161,6 +161,27 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(contacts[0]["aliases"], ["old-first"])
 
+    @patch("utils.find_chat_nickname_elements")
+    def test_duplicate_dom_nodes_in_same_chat_row_are_not_ambiguous(self, elements):
+        first = Mock()
+        first.text = "Right User"
+        first.rect = {"y": 120}
+        second = Mock()
+        second.text = "Right User"
+        second.rect = {"y": 123}
+        elements.return_value = [first, second]
+        contact = {
+            "username": "right_user",
+            "display_name": "Right User",
+            "aliases": [],
+            "enabled": True,
+        }
+
+        match, reason = utils.find_unique_chat_element(Mock(), contact, [contact])
+
+        self.assertIs(match, first)
+        self.assertIsNone(reason)
+
     def test_resolver_never_mutates_contact_matched_only_by_display_name(self):
         existing = {
             "username": "allowed_user",

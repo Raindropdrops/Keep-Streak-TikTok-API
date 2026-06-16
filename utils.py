@@ -806,9 +806,25 @@ def find_unique_chat_element(browser, contact, enabled_contacts):
         except Exception:
             continue
 
-    if len(matches) == 1:
-        return matches[0], None
-    if len(matches) > 1:
+    deduped_matches = []
+    seen_rows = set()
+    for element in matches:
+        try:
+            rect = element.rect or {}
+            row_key = (
+                normalize_name(element.text).casefold(),
+                round(float(rect.get("y", 0)) / 8),
+            )
+        except Exception:
+            row_key = (id(element), len(deduped_matches))
+        if row_key in seen_rows:
+            continue
+        seen_rows.add(row_key)
+        deduped_matches.append(element)
+
+    if len(deduped_matches) == 1:
+        return deduped_matches[0], None
+    if len(deduped_matches) > 1:
         return None, "ambiguous_sidebar_label"
     return None, "not_found"
 
