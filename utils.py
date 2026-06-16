@@ -8,6 +8,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     StaleElementReferenceException,
+    TimeoutException,
     WebDriverException,
 )
 import time, re, csv, os, json, random, sys
@@ -35,6 +36,7 @@ def init_browser(headless=True):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1440,1000")
+    chrome_options.page_load_strategy = "eager"
     chrome_options.add_argument(f"user-agent={USER_AGENT}")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -42,7 +44,7 @@ def init_browser(headless=True):
     if headless:
         chrome_options.add_argument("--headless=new")
     browser = webdriver.Chrome(options=chrome_options)
-    browser.set_page_load_timeout(60)
+    browser.set_page_load_timeout(30)
     
     # Xoá flag navigator.webdriver để tránh bị TikTok phát hiện bot
     try:
@@ -55,6 +57,21 @@ def init_browser(headless=True):
     wait = WebDriverWait(browser, 20)
 
     return browser, wait
+
+
+def safe_browser_get(browser, url, wait_after=3):
+    try:
+        browser.get(url)
+        time.sleep(wait_after)
+        return True
+    except (TimeoutException, WebDriverException) as e:
+        print(f"[Browser] Page load warning for {url}: {e}")
+        try:
+            browser.execute_script("window.stop();")
+        except Exception:
+            pass
+        time.sleep(wait_after)
+        return False
 
 
 def save_cookies(browser, filepath):
@@ -116,15 +133,13 @@ def login_tiktok(browser, wait, username, password):
     # 1. Thử đăng nhập bằng cookies trước để tránh Captcha
     if os.path.exists(COOKIES_FILE):
         print("[Login] Tìm thấy cookies.json, tiến hành nạp phiên đăng nhập cũ...")
-        browser.get('https://www.tiktok.com')
-        time.sleep(3)
+        safe_browser_get(browser, 'https://www.tiktok.com', wait_after=3)
         try:
             browser.delete_all_cookies()  # Xoá cookies mặc định tránh xung đột
         except:
             pass
         if load_cookies(browser, COOKIES_FILE):
-            browser.get('https://www.tiktok.com/messages?lang=vi')
-            time.sleep(5)
+            safe_browser_get(browser, 'https://www.tiktok.com/messages?lang=vi', wait_after=5)
             if is_logged_in(browser):
                 print("[Login] Đăng nhập bằng COOKIES THÀNH CÔNG!")
                 return
@@ -137,7 +152,7 @@ def login_tiktok(browser, wait, username, password):
 
     # 2. Đăng nhập bằng form nếu không có cookies/cookies hết hạn
     print("[Login] Bắt đầu điều hướng tới trang đăng nhập TikTok...")
-    browser.get('https://www.tiktok.com/login/phone-or-email/email')
+    safe_browser_get(browser, 'https://www.tiktok.com/login/phone-or-email/email', wait_after=1)
     
     actions = ActionChains(browser, duration=550)
 
@@ -880,8 +895,7 @@ def click_chat_by_name(browser, name):
 def _legacy_send_messages_flow_disabled(browser, wait):
     raise RuntimeError("Unsafe legacy send flow is disabled.")
     print("[Send Flow] Starting auto-send flow...")
-    browser.get('https://www.tiktok.com/messages?lang=vi')
-    time.sleep(5)
+    safe_browser_get(browser, 'https://www.tiktok.com/messages?lang=vi', wait_after=5)
     
     if not is_logged_in(browser):
         print("[Send Flow] Error: Cookie expired or not logged in.")
@@ -1151,8 +1165,7 @@ def send_to_verified_contact(browser, wait, contact, message):
 
 def send_messages_flow(browser, wait):
     print("[Send Flow] Starting strict recipient flow...")
-    browser.get("https://www.tiktok.com/messages?lang=vi")
-    time.sleep(5)
+    safe_browser_get(browser, "https://www.tiktok.com/messages?lang=vi", wait_after=5)
 
     if not is_logged_in(browser):
         print("[Send Flow] Error: Cookie expired or not logged in.")
@@ -1860,8 +1873,7 @@ def extract_ids_from_page(browser):
 
 def resolve_contacts_flow(browser, wait):
     print("[Resolver] Navigating to messages...")
-    browser.get('https://www.tiktok.com/messages?lang=vi')
-    time.sleep(5)
+    safe_browser_get(browser, 'https://www.tiktok.com/messages?lang=vi', wait_after=5)
     
     if not is_logged_in(browser):
         print("[Resolver] Error: Cookie expired or not logged in.")
