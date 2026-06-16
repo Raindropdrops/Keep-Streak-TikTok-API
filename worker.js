@@ -203,7 +203,7 @@ export default {
 
             const profileUrl = `https://www.tiktok.com/@${username}`;
             await env.DB.prepare(
-              "INSERT INTO tiktok_contacts (username, display_name, profile_url, aliases, enabled) VALUES (?1, ?2, ?3, '[]', 1)"
+              "INSERT INTO tiktok_contacts (username, display_name, profile_url, aliases, enabled) VALUES (?1, ?2, ?3, '[]', 0)"
             ).bind(username, displayName || username, profileUrl).run();
 
             return new Response(JSON.stringify({ status: "success", message: "Đã thêm bạn bè thành công." }), {

@@ -126,6 +126,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
+          TIKTOK_SELECTED_RECIPIENTS: ${{ secrets.TIKTOK_SELECTED_RECIPIENTS }}
+          REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST: 'true'
           MAX_RETRIES_PER_CONTACT: '4'
           SEND_FLOW_MAX_SECONDS: '1200'
           DAILY_COOLDOWN: 'true'

@@ -73,6 +73,36 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertFalse(utils.is_contact_enabled({"enabled": "true"}))
         self.assertFalse(utils.is_contact_enabled({}))
 
+    def test_default_contact_is_not_enabled_for_sending(self):
+        self.assertFalse(utils.get_default_contact("new_user")["enabled"])
+
+    def test_selected_recipient_allowlist_parses_exact_usernames(self):
+        selected = utils.parse_selected_recipient_usernames(
+            "@FirstUser, second_user\nTHIRD.USER"
+        )
+
+        self.assertEqual(selected, {"firstuser", "second_user", "third.user"})
+
+    def test_enabled_contact_is_blocked_without_explicit_allowlist(self):
+        contacts = [{"username": "right_user", "enabled": True}]
+
+        with patch.dict(utils.os.environ, {}, clear=True):
+            safe = utils.get_safe_enabled_contacts(contacts)
+
+        self.assertEqual(safe, [])
+
+    def test_allowlist_limits_enabled_contacts(self):
+        contacts = [
+            {"username": "right_user", "enabled": True},
+            {"username": "other_user", "enabled": True},
+        ]
+
+        safe = utils.get_safe_enabled_contacts(
+            contacts, selected_usernames={"right_user"}
+        )
+
+        self.assertEqual([contact["username"] for contact in safe], ["right_user"])
+
     def test_duplicate_enabled_usernames_are_all_rejected(self):
         contacts = [
             {"username": "ExactUser", "enabled": True},
@@ -80,7 +110,9 @@ class RecipientSafetyTests(unittest.TestCase):
             {"username": "other", "enabled": True},
         ]
 
-        safe = utils.get_safe_enabled_contacts(contacts)
+        safe = utils.get_safe_enabled_contacts(
+            contacts, selected_usernames={"exactuser", "other"}
+        )
 
         self.assertEqual([contact["username"] for contact in safe], ["other"])
 
@@ -300,7 +332,10 @@ class RecipientSafetyTests(unittest.TestCase):
         )
         browser = Mock()
 
-        result = utils.send_messages_flow(browser, Mock())
+        with patch.dict(
+            utils.os.environ, {"TIKTOK_SELECTED_RECIPIENTS": "right_user"}
+        ):
+            result = utils.send_messages_flow(browser, Mock())
 
         send_message.assert_not_called()
         self.assertEqual(result["sent_count"], 0)
@@ -344,7 +379,10 @@ class RecipientSafetyTests(unittest.TestCase):
             }
         ]
 
-        result = utils.send_messages_flow(Mock(), Mock())
+        with patch.dict(
+            utils.os.environ, {"TIKTOK_SELECTED_RECIPIENTS": "right_user"}
+        ):
+            result = utils.send_messages_flow(Mock(), Mock())
 
         send_message.assert_called_once()
         self.assertEqual(result["sent_count"], 1)
@@ -394,7 +432,11 @@ class RecipientSafetyTests(unittest.TestCase):
         ]
 
         with patch("config.SEND_FLOW_MAX_SECONDS", 1):
-            result = utils.send_messages_flow(Mock(), Mock())
+            with patch.dict(
+                utils.os.environ,
+                {"TIKTOK_SELECTED_RECIPIENTS": "first_user second_user"},
+            ):
+                result = utils.send_messages_flow(Mock(), Mock())
 
         send_message.assert_called_once()
         self.assertEqual(result["sent_count"], 1)

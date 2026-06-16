@@ -20,16 +20,21 @@ load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser(description="TikTok Streak Auto - Phase 2 CLI")
-    parser.add_argument("--send", action="store_true", help="Send messages to enabled contacts (Default)")
+    parser.add_argument("--send", action="store_true", help="Send messages to explicitly selected contacts")
     parser.add_argument("--resolve-contacts", action="store_true", help="Scan TikTok inbox and resolve contact IDs/names")
     parser.add_argument("--debug-screenshots", action="store_true", help="Enable verbose debug screenshots")
     parser.add_argument("--debug-html", action="store_true", help="Enable saving HTML snapshots on error")
     
     args = parser.parse_args()
     
-    # Default action is sending if not resolving
+    # Sending is never the default action. This avoids accidental sends from
+    # local scripts or misconfigured automation.
     is_resolve = args.resolve_contacts
-    is_send = args.send or not is_resolve
+    is_send = args.send
+
+    if not is_resolve and not is_send:
+        print("[CLI] No action selected. Use --send or --resolve-contacts.")
+        return 2
     
     # Export debug flags to environment variables so utils.py can read them
     if args.debug_screenshots:

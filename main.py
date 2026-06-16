@@ -1,10 +1,14 @@
-from utils import init_browser, login_tiktok, auto_send_message
-from dotenv import load_dotenv
-import os
+"""Deprecated entrypoint.
 
-load_dotenv()
+Use streak_bot.py with an explicit action instead. This file intentionally
+does not send messages, so running `python main.py` cannot trigger a send.
+"""
+
+
+def main():
+    print("main.py is disabled. Use: python streak_bot.py --send")
+    return 2
+
 
 if __name__ == "__main__":
-    browser, wait = init_browser()
-    login_tiktok(browser, wait, os.getenv("TIKTOK_USERNAME"), os.getenv("TIKTOK_PASSWORD"))
-    auto_send_message(browser, wait)
+    raise SystemExit(main())

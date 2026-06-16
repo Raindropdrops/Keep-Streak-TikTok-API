@@ -17,6 +17,6 @@ CREATE TABLE IF NOT EXISTS tiktok_contacts (
   last_sent_at TEXT,
   success_count INTEGER DEFAULT 0,
   failure_count INTEGER DEFAULT 0,
-  enabled INTEGER DEFAULT 1,
+  enabled INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );

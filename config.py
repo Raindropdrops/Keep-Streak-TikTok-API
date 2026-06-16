@@ -42,6 +42,9 @@ SCHEDULE_INTERVAL_MINUTES = int(os.getenv("SCHEDULE_INTERVAL_MINUTES", "1380")) 
 # =============================================================================
 MAX_RETRIES_PER_CONTACT = int(os.getenv("MAX_RETRIES_PER_CONTACT", "4"))
 SEND_FLOW_MAX_SECONDS = int(os.getenv("SEND_FLOW_MAX_SECONDS", "1200"))
+REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST = (
+    os.getenv("REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST", "true").lower() == "true"
+)
 SKIP_UNREACHABLE = os.getenv("SKIP_UNREACHABLE", "true").lower() == "true"
 DAILY_COOLDOWN = os.getenv("DAILY_COOLDOWN", "true").lower() == "true"
 NETWORK_CHECK = os.getenv("NETWORK_CHECK", "true").lower() == "true"

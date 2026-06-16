@@ -145,7 +145,7 @@ switch ($action) {
                 if (empty($c['username'])) continue;
 
                 $aliases_str = isset($c['aliases']) ? json_encode($c['aliases'], JSON_UNESCAPED_UNICODE) : '[]';
-                $enabled_val = isset($c['enabled']) ? ($c['enabled'] ? 1 : 0) : 1;
+                $enabled_val = isset($c['enabled']) ? ($c['enabled'] ? 1 : 0) : 0;
 
                 $stmt->execute([
                     ':username' => $c['username'],
@@ -224,7 +224,7 @@ switch ($action) {
             }
 
             $profile_url = "https://www.tiktok.com/@" . $username;
-            $stmt = $pdo->prepare("INSERT INTO `tiktok_contacts` (`username`, `display_name`, `profile_url`, `aliases`, `enabled`) VALUES (:username, :display_name, :profile_url, '[]', 1)");
+            $stmt = $pdo->prepare("INSERT INTO `tiktok_contacts` (`username`, `display_name`, `profile_url`, `aliases`, `enabled`) VALUES (:username, :display_name, :profile_url, '[]', 0)");
             $stmt->execute([
                 ':username' => $username,
                 ':display_name' => $display_name,

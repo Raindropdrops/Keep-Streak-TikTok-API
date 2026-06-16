@@ -776,6 +776,26 @@ def is_contact_enabled(contact):
     )
 
 
+def parse_selected_recipient_usernames(raw_value):
+    if not isinstance(raw_value, str):
+        return set()
+    usernames = set()
+    for item in re.split(r"[\s,;|]+", raw_value):
+        username = normalize_username(item)
+        if username:
+            usernames.add(username)
+    return usernames
+
+
+def get_selected_recipient_usernames():
+    raw_value = (
+        os.getenv("TIKTOK_SELECTED_RECIPIENTS")
+        or os.getenv("SELECTED_RECIPIENTS")
+        or ""
+    )
+    return parse_selected_recipient_usernames(raw_value)
+
+
 def recipient_is_verified(contact, active_username, active_conv_id=None):
     expected_username = normalize_username(contact.get("username"))
     actual_username = normalize_username(active_username)
@@ -790,7 +810,21 @@ def recipient_is_verified(contact, active_username, active_conv_id=None):
     return True
 
 
-def get_safe_enabled_contacts(contacts):
+def get_safe_enabled_contacts(contacts, selected_usernames=None):
+    from config import REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST
+
+    if selected_usernames is None:
+        selected_usernames = get_selected_recipient_usernames()
+    else:
+        selected_usernames = {normalize_username(u) for u in selected_usernames}
+
+    if REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST and not selected_usernames:
+        print(
+            "[Send Flow] BLOCKED: TIKTOK_SELECTED_RECIPIENTS is empty. "
+            "No one is allowed to receive messages."
+        )
+        return []
+
     username_counts = {}
     for contact in contacts:
         if not is_contact_enabled(contact):
@@ -806,6 +840,12 @@ def get_safe_enabled_contacts(contacts):
         username = normalize_username(contact.get("username"))
         if not username:
             print("[Send Flow] SKIPPED enabled contact with missing/invalid username.")
+            continue
+        if selected_usernames and username not in selected_usernames:
+            print(f"[Send Flow] SKIPPED @{username}: not in explicit allowlist.")
+            continue
+        if REQUIRE_EXPLICIT_RECIPIENT_ALLOWLIST and username not in selected_usernames:
+            print(f"[Send Flow] SKIPPED @{username}: not explicitly selected.")
             continue
         if username_counts.get(username) != 1:
             print(f"[Send Flow] SKIPPED duplicate enabled username: @{username}")
@@ -1414,7 +1454,7 @@ def get_default_contact(username, display_name=None):
         "last_sent_at": None,
         "success_count": 0,
         "failure_count": 0,
-        "enabled": True
+        "enabled": False
     }
 
 def load_contacts():

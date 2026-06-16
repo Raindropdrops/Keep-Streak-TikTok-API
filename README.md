@@ -1,35 +1,32 @@
 # TikTok Streak Auto
 
-Bot Selenium tự động gửi tin nhắn TikTok mỗi ngày cho danh sách liên hệ đã bật.
+Bot Selenium gửi tin nhắn TikTok hằng ngày cho danh sách người nhận được chọn rõ ràng.
 
-## Chức năng
+## An toàn người nhận
 
-- Chỉ gửi sau khi xác minh đúng username của người nhận.
-- Tin nhắn thay đổi theo từng ngày trong tuần.
-- Tự thử lại khi TikTok hiển thị popup hoặc gặp lỗi tạm thời.
-- Không gửi trùng cho cùng một người trong ngày.
-- Chạy trên GitHub Actions lúc 04:00, 06:00 và 08:00 giờ Việt Nam.
-- Hỗ trợ báo cáo kết quả qua Telegram.
+Bot chỉ gửi khi thỏa cả hai điều kiện:
 
-## Cài đặt
+- Contact đang bật `enabled`.
+- Username nằm trong allowlist `TIKTOK_SELECTED_RECIPIENTS`.
 
-Yêu cầu Python 3.10 trở lên và Google Chrome.
+Nếu `TIKTOK_SELECTED_RECIPIENTS` trống, bot không gửi cho ai. Đây là lớp khóa bắt buộc để tránh gửi nhầm khi database contact bị sai hoặc bật quá rộng.
 
-```bash
-pip install -r requirements.txt
+Ví dụ secret:
+
+```text
+user_a,user_b
+@user_c
 ```
-
-Sao chép `.env.example` thành `.env`, sau đó điền tài khoản và cấu hình cần thiết.
-Không commit `.env`, `cookies.json` hoặc thông tin đăng nhập.
 
 ## GitHub Secrets
 
-Vào `Settings > Secrets and variables > Actions` và thêm:
+Thêm trong `Settings > Secrets and variables > Actions`:
 
 ```text
 TIKTOK_USERNAME
 TIKTOK_PASSWORD
 TIKTOK_COOKIES
+TIKTOK_SELECTED_RECIPIENTS
 MESSAGES
 MESSAGE_MON ... MESSAGE_SUN
 API_BASE_URL
@@ -38,16 +35,16 @@ TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 ```
 
-`TIKTOK_COOKIES` phải chứa nội dung JSON của file cookie TikTok. Các biến Telegram
-và tin nhắn riêng theo ngày là tùy chọn.
+`TIKTOK_COOKIES`, `TELEGRAM_*`, `MESSAGE_*`, `API_BASE_URL`, `API_KEY` tùy theo cách bạn đang chạy bot. Không commit `.env`, `cookies.json` hoặc thông tin đăng nhập.
 
-## Sử dụng
-
-Gửi tin nhắn:
+## Chạy local
 
 ```bash
+pip install -r requirements.txt
 python streak_bot.py --send
 ```
+
+Lệnh `python streak_bot.py` không có tham số sẽ dừng lại và không mở browser.
 
 Quét lại danh sách chat:
 
@@ -63,12 +60,6 @@ python -m unittest discover -s tests -v
 
 ## GitHub Actions
 
-Workflow chạy chính lúc 04:00 và chạy bù lúc 06:00, 08:00 giờ Việt Nam. Các lần
-chạy bù chỉ xử lý người chưa nhận trong ngày. Workflow sẽ báo lỗi nếu chưa gửi đủ.
+Workflow đang được thiết kế để chạy lúc 04:00, 06:00 và 08:00 giờ Việt Nam, nhưng hiện đã bị disable thủ công trên GitHub để tránh gửi tiếp.
 
-Có thể chọn `validate_only` khi chạy thủ công để kiểm tra workflow mà không gửi tin.
-
-## Lưu ý
-
-TikTok có thể thay đổi giao diện hoặc yêu cầu xác minh đăng nhập. Khi không xác minh
-được chính xác người nhận, bot sẽ bỏ qua thay vì gửi nhầm.
+Chỉ bật lại workflow sau khi đã set chính xác `TIKTOK_SELECTED_RECIPIENTS`.
