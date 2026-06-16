@@ -321,6 +321,57 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertEqual(result["sent_count"], 1)
         self.assertEqual(result["status"], "success")
 
+    @patch("utils.time.sleep")
+    @patch("utils.time.monotonic", side_effect=[0, 0, 2])
+    @patch("utils._load_delivery_history", return_value={})
+    @patch("utils.save_contacts")
+    @patch("utils.send_telegram_summary")
+    @patch("utils.send_and_verify_message", return_value=(True, "success"))
+    @patch("utils.extract_conversation_id", return_value=None)
+    @patch(
+        "utils.extract_active_chat_profile",
+        return_value=("https://www.tiktok.com/@first_user", "first_user"),
+    )
+    @patch("utils.get_message_for_today", return_value="hello")
+    @patch("utils.load_contacts")
+    @patch("utils.is_logged_in", return_value=True)
+    def test_send_flow_deadline_leaves_remaining_contacts_for_catchup(
+        self,
+        _is_logged_in,
+        load_contacts,
+        _message,
+        _active_profile,
+        _conversation_id,
+        send_message,
+        _telegram,
+        _save_contacts,
+        _delivery_history,
+        _monotonic,
+        _sleep,
+    ):
+        load_contacts.return_value = [
+            {
+                "username": "first_user",
+                "display_name": "First User",
+                "aliases": [],
+                "enabled": True,
+            },
+            {
+                "username": "second_user",
+                "display_name": "Second User",
+                "aliases": [],
+                "enabled": True,
+            },
+        ]
+
+        with patch("config.SEND_FLOW_MAX_SECONDS", 1):
+            result = utils.send_messages_flow(Mock(), Mock())
+
+        send_message.assert_called_once()
+        self.assertEqual(result["sent_count"], 1)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["details"][1]["reason"], "run_deadline_exceeded")
+
     def test_delivery_history_prevents_duplicate_send_on_catch_up_run(self):
         now = datetime(2026, 6, 13, 6, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
         contact = {

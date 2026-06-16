@@ -2,6 +2,7 @@ name: TikTok Streak Auto Send
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYTHONUNBUFFERED: '1'
 
 permissions:
   contents: read
@@ -42,6 +43,7 @@ on:
 jobs:
   run-streak-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -125,6 +127,7 @@ jobs:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
           MAX_RETRIES_PER_CONTACT: '4'
+          SEND_FLOW_MAX_SECONDS: '1200'
           DAILY_COOLDOWN: 'true'
         run: |
           ARGS=""
@@ -140,12 +143,12 @@ jobs:
           # Resolver is manual-only and never sends in the same run.
           if [ "${{ github.event.inputs.resolve_contacts }}" = "true" ]; then
             echo "Running contact resolver only; message sending is disabled."
-            python streak_bot.py --resolve-contacts $ARGS
+            python -u streak_bot.py --resolve-contacts $ARGS
             exit 0
           fi
           
           echo "Starting strict recipient send flow..."
-          python streak_bot.py --send $ARGS
+          python -u streak_bot.py --send $ARGS
 
       - name: Validation-only confirmation
         if: github.event.inputs.validate_only == 'true'

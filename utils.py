@@ -1164,6 +1164,8 @@ def send_to_verified_contact(browser, wait, contact, message):
 
 
 def send_messages_flow(browser, wait):
+    from config import SEND_FLOW_MAX_SECONDS
+
     print("[Send Flow] Starting strict recipient flow...")
     safe_browser_get(browser, "https://www.tiktok.com/messages?lang=vi", wait_after=5)
 
@@ -1195,9 +1197,22 @@ def send_messages_flow(browser, wait):
     delivery_history = _load_delivery_history()
     stats = []
     processed_usernames = set()
+    stopped_reason = None
+    send_deadline = None
+    if SEND_FLOW_MAX_SECONDS > 0:
+        send_deadline = time.monotonic() + SEND_FLOW_MAX_SECONDS
+        print(f"[Send Flow] Run deadline: {SEND_FLOW_MAX_SECONDS}s")
     print("[Send Flow] Strict mode: exact username verification is mandatory.")
 
     for contact in enabled_contacts:
+        if send_deadline is not None and time.monotonic() >= send_deadline:
+            stopped_reason = "run_deadline_exceeded"
+            print(
+                "[Send Flow] Run deadline reached; remaining contacts will be "
+                "left for the next catch-up run."
+            )
+            break
+
         username = contact["username"]
         display_name = contact.get("display_name", username)
 
@@ -1262,7 +1277,7 @@ def send_messages_flow(browser, wait):
             "username": contact["username"],
             "display_name": contact.get("display_name", contact["username"]),
             "success": False,
-            "reason": "not_processed",
+            "reason": stopped_reason or "not_processed",
         })
 
     total_enabled = len(enabled_contacts)
