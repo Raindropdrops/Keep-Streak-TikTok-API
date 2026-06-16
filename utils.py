@@ -549,7 +549,100 @@ def _count_exact_message_occurrences(browser, message):
         return 0
 
 
+def _unlock_tiktok_screen_time_modal(browser):
+    passcode = os.getenv("TIKTOK_SCREEN_TIME_PASSCODE", "1234").strip()
+    if not passcode:
+        return False
+
+    try:
+        body_text = str(
+            browser.find_element(By.TAG_NAME, "body").text or ""
+        ).casefold()
+    except Exception:
+        return False
+
+    markers = (
+        "bạn đã sẵn sàng đóng tiktok",
+        "giới hạn thời gian",
+        "quay lại tiktok",
+        "screen time",
+        "return to tiktok",
+    )
+    if not any(marker in body_text for marker in markers):
+        return False
+
+    input_selectors = [
+        "input[type='password']",
+        "input[inputmode='numeric']",
+        "input",
+        "[contenteditable='true']",
+    ]
+    passcode_input = None
+    for selector in input_selectors:
+        try:
+            for element in browser.find_elements(By.CSS_SELECTOR, selector):
+                if hasattr(element, "is_displayed") and not element.is_displayed():
+                    continue
+                passcode_input = element
+                break
+        except Exception:
+            continue
+        if passcode_input is not None:
+            break
+
+    if passcode_input is None:
+        return False
+
+    try:
+        passcode_input.click()
+        try:
+            passcode_input.clear()
+        except Exception:
+            pass
+        passcode_input.send_keys(passcode)
+        time.sleep(0.4)
+    except Exception:
+        return False
+
+    button_xpaths = [
+        (
+            "//*[self::button or @role='button' or self::div]"
+            "[contains(., 'Quay lại TikTok')]"
+        ),
+        (
+            "//*[self::button or @role='button' or self::div]"
+            "[contains(., 'Return to TikTok')]"
+        ),
+        (
+            "//*[self::button or @role='button' or self::div]"
+            "[contains(., 'Tiếp tục') or contains(., 'Continue')]"
+        ),
+    ]
+    for xpath in button_xpaths:
+        try:
+            for button in browser.find_elements(By.XPATH, xpath):
+                if hasattr(button, "is_displayed") and not button.is_displayed():
+                    continue
+                browser.execute_script("arguments[0].click();", button)
+                time.sleep(0.8)
+                print("[Overlay] Unlocked TikTok screen-time modal.")
+                return True
+        except Exception:
+            continue
+
+    try:
+        passcode_input.send_keys(Keys.RETURN)
+        time.sleep(0.8)
+        print("[Overlay] Submitted TikTok screen-time modal passcode.")
+        return True
+    except Exception:
+        return False
+
+
 def dismiss_blocking_overlays(browser):
+    if _unlock_tiktok_screen_time_modal(browser):
+        return True
+
     dismissed = False
     try:
         ActionChains(browser).send_keys(Keys.ESCAPE).perform()
@@ -590,6 +683,8 @@ def _message_input_is_empty(message_input):
 
 
 def send_and_verify_message(browser, wait, message, contact_username):
+    dismiss_blocking_overlays(browser)
+
     input_selectors = [
         (
             By.CSS_SELECTOR,

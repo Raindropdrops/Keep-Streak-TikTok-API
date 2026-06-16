@@ -182,6 +182,35 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertIs(match, first)
         self.assertIsNone(reason)
 
+    @patch("utils.time.sleep")
+    def test_screen_time_modal_is_unlocked_before_sending(self, _sleep):
+        browser = Mock()
+        body = Mock()
+        body.text = "Bạn đã sẵn sàng đóng TikTok? Quay lại TikTok"
+        passcode_input = Mock()
+        passcode_input.is_displayed.return_value = True
+        button = Mock()
+        button.is_displayed.return_value = True
+        browser.find_element.return_value = body
+
+        def find_elements(by, selector):
+            if by == utils.By.CSS_SELECTOR and selector == "input[type='password']":
+                return [passcode_input]
+            if by == utils.By.XPATH and "Quay lại TikTok" in selector:
+                return [button]
+            return []
+
+        browser.find_elements.side_effect = find_elements
+
+        with patch.dict(utils.os.environ, {"TIKTOK_SCREEN_TIME_PASSCODE": "9876"}):
+            unlocked = utils._unlock_tiktok_screen_time_modal(browser)
+
+        self.assertTrue(unlocked)
+        passcode_input.send_keys.assert_called_once_with("9876")
+        browser.execute_script.assert_called_once_with(
+            "arguments[0].click();", button
+        )
+
     def test_resolver_never_mutates_contact_matched_only_by_display_name(self):
         existing = {
             "username": "allowed_user",
