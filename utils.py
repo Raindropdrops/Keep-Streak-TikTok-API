@@ -705,31 +705,91 @@ def get_safe_enabled_contacts(contacts):
 
 
 def get_contact_sidebar_labels(contact, enabled_contacts):
-    label_owners = {}
+    primary_label_owners = {}
+    alias_label_owners = {}
     for candidate in enabled_contacts:
-        raw_labels = [
-            candidate.get("username"),
-            candidate.get("display_name"),
-            *candidate.get("aliases", []),
-        ]
         owner = normalize_username(candidate.get("username"))
-        for raw_label in raw_labels:
+        primary_labels = [candidate.get("username"), candidate.get("display_name")]
+        for raw_label in primary_labels:
             label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
             if label:
-                label_owners.setdefault(label, set()).add(owner)
+                primary_label_owners.setdefault(label, set()).add(owner)
+        for raw_label in candidate.get("aliases", []):
+            label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
+            if label:
+                alias_label_owners.setdefault(label, set()).add(owner)
 
     target_username = normalize_username(contact.get("username"))
     labels = set()
-    raw_labels = [
-        contact.get("username"),
-        contact.get("display_name"),
-        *contact.get("aliases", []),
-    ]
-    for raw_label in raw_labels:
+
+    username_label = (
+        normalize_name(contact.get("username")).casefold()
+        if isinstance(contact.get("username"), str)
+        else ""
+    )
+    if username_label:
+        labels.add(username_label)
+
+    display_label = (
+        normalize_name(contact.get("display_name")).casefold()
+        if isinstance(contact.get("display_name"), str)
+        else ""
+    )
+    if display_label and primary_label_owners.get(display_label) == {target_username}:
+        labels.add(display_label)
+
+    for raw_label in contact.get("aliases", []):
         label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
-        if label and label_owners.get(label) == {target_username}:
+        primary_owners = primary_label_owners.get(label, set())
+        alias_owners = alias_label_owners.get(label, set())
+        if (
+            label
+            and (not primary_owners or primary_owners == {target_username})
+            and alias_owners == {target_username}
+        ):
             labels.add(label)
     return labels
+
+
+def sanitize_contact_aliases(contacts):
+    primary_label_owner = {}
+    for contact in contacts:
+        owner = normalize_username(contact.get("username"))
+        if not owner:
+            continue
+        for raw_label in (contact.get("username"), contact.get("display_name")):
+            label = normalize_name(raw_label).casefold() if isinstance(raw_label, str) else ""
+            if label:
+                primary_label_owner.setdefault(label, owner)
+
+    changed = False
+    for contact in contacts:
+        owner = normalize_username(contact.get("username"))
+        own_primary = {
+            normalize_name(raw).casefold()
+            for raw in (contact.get("username"), contact.get("display_name"))
+            if isinstance(raw, str) and normalize_name(raw)
+        }
+        clean_aliases = []
+        seen = set()
+        for alias in contact.get("aliases", []):
+            if not isinstance(alias, str):
+                changed = True
+                continue
+            label = normalize_name(alias).casefold()
+            if not label or label in seen or label in own_primary:
+                changed = True
+                continue
+            label_owner = primary_label_owner.get(label)
+            if label_owner and label_owner != owner:
+                changed = True
+                continue
+            clean_aliases.append(alias)
+            seen.add(label)
+        if clean_aliases != contact.get("aliases", []):
+            contact["aliases"] = clean_aliases
+            changed = True
+    return changed
 
 
 def find_unique_chat_element(browser, contact, enabled_contacts):
@@ -1088,6 +1148,9 @@ def send_messages_flow(browser, wait):
         return {"status": "failed", "reason": "cookie_expired"}
 
     contacts = load_contacts()
+    if sanitize_contact_aliases(contacts):
+        print("[Contacts] Removed unsafe/cross-contact aliases before sending.")
+        save_contacts(contacts)
     enabled_contacts = get_safe_enabled_contacts(contacts)
     if not enabled_contacts:
         print("[Send Flow] No explicitly enabled, uniquely identified contacts.")

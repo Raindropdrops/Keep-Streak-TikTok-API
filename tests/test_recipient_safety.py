@@ -121,6 +121,46 @@ class RecipientSafetyTests(unittest.TestCase):
         self.assertNotIn("same name", labels)
         self.assertIn("first", labels)
 
+    def test_cross_contact_alias_does_not_block_primary_labels(self):
+        first = {
+            "username": "first",
+            "display_name": "First Display",
+            "aliases": ["second", "Second Display", "old-first"],
+            "enabled": True,
+        }
+        second = {
+            "username": "second",
+            "display_name": "Second Display",
+            "aliases": [],
+            "enabled": True,
+        }
+
+        labels = utils.get_contact_sidebar_labels(second, [first, second])
+
+        self.assertIn("second", labels)
+        self.assertIn("second display", labels)
+
+    def test_sanitize_contact_aliases_removes_other_contacts_primary_labels(self):
+        contacts = [
+            {
+                "username": "first",
+                "display_name": "First Display",
+                "aliases": ["second", "Second Display", "old-first", "old-first"],
+                "enabled": True,
+            },
+            {
+                "username": "second",
+                "display_name": "Second Display",
+                "aliases": [],
+                "enabled": True,
+            },
+        ]
+
+        changed = utils.sanitize_contact_aliases(contacts)
+
+        self.assertTrue(changed)
+        self.assertEqual(contacts[0]["aliases"], ["old-first"])
+
     def test_resolver_never_mutates_contact_matched_only_by_display_name(self):
         existing = {
             "username": "allowed_user",
