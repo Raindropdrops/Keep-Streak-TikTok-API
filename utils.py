@@ -367,13 +367,35 @@ def _load_delivery_history():
     return {}
 
 
-def _save_delivery_history(history):
-    cutoff = (get_vietnam_now() - timedelta(days=14)).strftime("%Y-%m-%d")
-    trimmed = {
-        date: sorted(set(usernames))
-        for date, usernames in history.items()
-        if date >= cutoff and isinstance(usernames, list)
-    }
+def _save_delivery_history(history, now=None):
+    """Persist delivery history, trimming entries older than 14 days relative to `now`.
+
+    Accepts an optional `now` (timezone-aware datetime) so callers (and tests)
+    can control the cutoff calculation. If `now` is None the current Vietnam
+    time is used.
+    """
+    now = now or get_vietnam_now()
+    # Allow configurable retention via env var. If set to 0 or negative,
+    # we keep all history (no trimming). Default is 14 days to avoid
+    # unbounded growth of the history file.
+    try:
+        retention_days = int(os.getenv("DELIVERY_HISTORY_RETENTION_DAYS", "14"))
+    except Exception:
+        retention_days = 14
+
+    if retention_days <= 0:
+        trimmed = {
+            date: sorted(set(usernames))
+            for date, usernames in history.items()
+            if isinstance(usernames, list)
+        }
+    else:
+        cutoff = (now - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+        trimmed = {
+            date: sorted(set(usernames))
+            for date, usernames in history.items()
+            if date >= cutoff and isinstance(usernames, list)
+        }
     temp_path = f"{DELIVERY_HISTORY_FILE}.tmp"
     try:
         with open(temp_path, "w", encoding="utf-8") as file:
@@ -420,7 +442,7 @@ def mark_contact_sent_today(contact, history=None, now=None):
         history.setdefault(today, [])
         if username not in history[today]:
             history[today].append(username)
-        _save_delivery_history(history)
+        _save_delivery_history(history, now)
     contact["last_sent"] = "success"
     contact["last_sent_at"] = now.isoformat()
     return history
